@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { WORLD } from '../systems/config';
+import { BOSS, PLANET, SCREECH, WORLD } from '../systems/config';
 import { gameState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
@@ -15,6 +15,15 @@ export class HudScene extends Phaser.Scene {
   private coinText!: Phaser.GameObjects.Text;
   private galaxyText!: Phaser.GameObjects.Text;
   private galaxyBar!: Phaser.GameObjects.Graphics;
+  private bossBar!: Phaser.GameObjects.Graphics;
+  private bossLabel!: Phaser.GameObjects.Text;
+  private crateText!: Phaser.GameObjects.Text;
+  private crateIcon!: Phaser.GameObjects.Image;
+  private swordIcon!: Phaser.GameObjects.Image;
+  private swordText!: Phaser.GameObjects.Text;
+  private screechText!: Phaser.GameObjects.Text;
+  private earmuffIcon!: Phaser.GameObjects.Image;
+  private earmuffLabel!: Phaser.GameObjects.Text;
 
   constructor() {
     super({ key: 'Hud', active: false });
@@ -39,6 +48,32 @@ export class HudScene extends Phaser.Scene {
       .setOrigin(0, 0.5);
     this.fragPips = this.add.graphics();
 
+    // --- crates in hand
+    this.crateIcon = this.add.image(340, 22, 'crate').setScale(0.55);
+    this.crateText = this.add
+      .text(356, 22, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#c79a55' })
+      .setOrigin(0, 0.5);
+
+    // --- the Star Sword, on the one floor you can be holding it
+    // Second row, clear of the floor title: the top row is already full.
+    this.swordIcon = this.add.image(238, 48, 'starsword').setScale(0.7).setVisible(false);
+    this.swordText = this.add
+      .text(252, 48, '', { fontFamily: FONT, fontSize: '13px', fontStyle: 'bold', color: '#fff6cf' })
+      .setOrigin(0, 0.5)
+      .setVisible(false);
+
+    // --- how your ears are doing, under the health bar. Screeched and muffled are
+    // mutually exclusive by definition, so they share the one line.
+    this.screechText = this.add
+      .text(16, 48, '', { fontFamily: FONT, fontSize: '11px', fontStyle: 'bold', color: '#ff8a8a' })
+      .setOrigin(0, 0.5)
+      .setVisible(false);
+    this.earmuffIcon = this.add.image(24, 48, 'earmuffs').setScale(0.7).setVisible(false);
+    this.earmuffLabel = this.add
+      .text(40, 48, 'screeches blocked', { fontFamily: FONT, fontSize: '11px', color: '#ff9ecb' })
+      .setOrigin(0, 0.5)
+      .setVisible(false);
+
     // --- floor and demons remaining
     this.floorText = this.add
       .text(W / 2, 16, '', {
@@ -51,6 +86,18 @@ export class HudScene extends Phaser.Scene {
     this.monsterText = this.add
       .text(W / 2, 38, '', { fontFamily: FONT, fontSize: '12px', color: '#ff8a8a' })
       .setOrigin(0.5, 0);
+
+    // --- boss bar, hung just under the HUD strip on boss floors
+    this.bossBar = this.add.graphics();
+    this.bossLabel = this.add
+      .text(W / 2, 76, '', {
+        fontFamily: FONT,
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#ff3b5c',
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
 
     // --- currency
     this.add.image(W - 178, 18, 'coin');
@@ -69,7 +116,7 @@ export class HudScene extends Phaser.Scene {
     this.galaxyBar = this.add.graphics();
 
     this.add
-      .text(W - 16, 46, 'WASD move · SPACE attack · E interact', {
+      .text(W - 16, 46, 'WASD move · SPACE attack · Q crate · E interact', {
         fontFamily: FONT,
         fontSize: '10px',
         color: '#7d7a8c',
@@ -102,6 +149,29 @@ export class HudScene extends Phaser.Scene {
         .fillCircle(288 + i * 13, 22, 4.5);
     }
 
+    // --- crates: greyed out once the stack is empty
+    this.crateText.setText(`${gameState.crates}`).setColor(gameState.crates > 0 ? '#c79a55' : '#5c5468');
+    this.crateIcon.setAlpha(gameState.crates > 0 ? 1 : 0.3);
+
+    // --- star sword
+    this.swordIcon.setVisible(gameState.hasStarSword);
+    this.swordText.setVisible(gameState.hasStarSword).setText(`${PLANET.swordDamage}`);
+
+    // --- screech and earmuffs
+    const muffed = gameState.blocksScreech;
+    this.earmuffIcon.setVisible(muffed);
+    this.earmuffLabel.setVisible(muffed);
+
+    if (gameState.isScreeched) {
+      this.screechText
+        .setText(
+          `SCREECHED!  attack -${Math.round(SCREECH.attackReduction * 100)}%  (${gameState.screechTimer.toFixed(1)}s)`
+        )
+        .setVisible(true);
+    } else {
+      this.screechText.setVisible(false);
+    }
+
     this.floorText.setText(`FLOOR ${gameState.floor}`);
     this.monsterText
       .setText(
@@ -110,6 +180,22 @@ export class HudScene extends Phaser.Scene {
           : `${monstersLeft} demon${monstersLeft === 1 ? '' : 's'} remaining`
       )
       .setColor(monstersLeft === 0 ? '#4ade80' : '#ff8a8a');
+
+    // --- boss health, whenever one is alive on this floor
+    const bossHp = (this.registry.get('bossHp') as number) ?? 0;
+    const bossMax = (this.registry.get('bossMaxHp') as number) ?? 0;
+    this.bossBar.clear();
+    this.bossLabel.setVisible(bossHp > 0);
+    if (bossHp > 0 && bossMax > 0) {
+      const name = ((this.registry.get('bossName') as string) ?? BOSS.name).toUpperCase();
+      this.bossLabel.setText(`${name}   ${bossHp.toLocaleString()} / ${bossMax.toLocaleString()}`);
+      const bw = 300;
+      const bx = W / 2 - bw / 2;
+      this.bossBar.fillStyle(0x2a0d16, 0.9).fillRoundedRect(bx, 88, bw, 12, 4);
+      this.bossBar
+        .fillStyle(0xff3b5c, 1)
+        .fillRoundedRect(bx + 2, 90, Math.max(3, (bw - 4) * (bossHp / bossMax)), 8, 3);
+    }
 
     this.coinText.setText(`${gameState.coins.toLocaleString()}`);
     this.galaxyText.setText(`◈ ${gameState.galaxyCoins}`);

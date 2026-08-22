@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AVATARS, AVATAR_SIZE, avatarTexture } from './avatars';
 import { TILE } from './config';
 
 /**
@@ -52,14 +53,11 @@ export function buildTextures(scene: Phaser.Scene): void {
   g.fillStyle(0x7bd8a8, 1).fillRect(9, TILE / 2 - 1, TILE - 18, 2);
   emit('shoppad', TILE, TILE);
 
-  // --- player: hooded delver, drawn facing down
-  const P = 26;
-  g.fillStyle(0x000000, 0.25).fillEllipse(P / 2, P - 3, 18, 7);
-  g.fillStyle(0x3f6fd1, 1).fillRoundedRect(4, 7, P - 8, P - 11, 5);
-  g.fillStyle(0x5b8ef0, 1).fillRoundedRect(5, 3, P - 10, 12, 6);
-  g.fillStyle(0xf2c9a0, 1).fillRoundedRect(8, 8, P - 16, 7, 3);
-  g.fillStyle(0x21386b, 1).fillRect(4, P - 8, P - 8, 3);
-  emit('player', P, P);
+  // --- every avatar you can wear, all the same size so the hitbox never changes
+  for (const avatar of AVATARS) {
+    avatar.draw(g);
+    emit(avatarTexture(avatar.id), AVATAR_SIZE, AVATAR_SIZE);
+  }
 
   // --- imp: small horned brawler
   const I = 22;
@@ -89,6 +87,64 @@ export function buildTextures(scene: Phaser.Scene): void {
   g.fillStyle(0x081a22, 1).fillCircle(W / 2 - 2.5, 8, 1.8);
   g.fillStyle(0x081a22, 1).fillCircle(W / 2 + 2.5, 8, 1.8);
   emit('wraith', W, W);
+
+  // --- boss: a crowned, winged demon, twice anything else on the floor
+  const BS = 44;
+  g.fillStyle(0x000000, 0.3).fillEllipse(BS / 2, BS - 4, 30, 10);
+  g.fillStyle(0xbbbbbb, 1).fillTriangle(1, 24, 13, 8, 15, 28);
+  g.fillStyle(0xbbbbbb, 1).fillTriangle(BS - 1, 24, BS - 13, 8, BS - 15, 28);
+  g.fillStyle(0xffffff, 1).fillRoundedRect(9, 16, BS - 18, 24, 8);
+  g.fillStyle(0xffffff, 1).fillCircle(BS / 2, 16, 12);
+  g.fillStyle(0xffffff, 1).fillTriangle(6, 10, 11, 0, 15, 11);
+  g.fillStyle(0xffffff, 1).fillTriangle(BS - 6, 10, BS - 11, 0, BS - 15, 11);
+  // Crown, a shade down so it still reads once the whole thing is tinted red.
+  g.fillStyle(0xd6d6d6, 1).fillRect(13, 5, 18, 4);
+  g.fillStyle(0xd6d6d6, 1).fillTriangle(13, 5, 17, 0, 21, 5);
+  g.fillStyle(0xd6d6d6, 1).fillTriangle(19, 5, 23, -1, 27, 5);
+  g.fillStyle(0xd6d6d6, 1).fillTriangle(25, 5, 29, 0, 31, 5);
+  g.fillStyle(0x2a0510, 1).fillCircle(BS / 2 - 4.5, 15, 2.6);
+  g.fillStyle(0x2a0510, 1).fillCircle(BS / 2 + 4.5, 15, 2.6);
+  g.fillStyle(0x2a0510, 1).fillRoundedRect(16, 21, 12, 5, 2);
+  g.fillStyle(0xffffff, 1).fillRect(18, 21, 2, 3);
+  g.fillStyle(0xffffff, 1).fillRect(23, 21, 2, 3);
+  g.fillStyle(0xcccccc, 1).fillRect(12, 30, BS - 24, 3);
+  emit('boss', BS, BS);
+
+  // --- thanos: drawn in real colours (his MONSTERS tint is white, so nothing recolours him)
+  const TS = 44;
+  g.fillStyle(0x000000, 0.3).fillEllipse(TS / 2, TS - 3, 30, 9);
+  g.fillStyle(0x2f4f9e, 1).fillRoundedRect(7, 20, TS - 14, 21, 7);
+  g.fillStyle(0x3f6fd1, 1).fillRoundedRect(9, 22, TS - 18, 15, 5);
+  g.fillStyle(0xffc93c, 1).fillRect(9, 28, TS - 18, 2);
+  g.fillStyle(0x6b3fa8, 1).fillRoundedRect(12, 15, 20, 10, 5);
+  g.fillStyle(0x9b5de5, 1).fillCircle(TS / 2, 14, 12);
+  g.fillStyle(0x8a4fd4, 1).fillEllipse(TS / 2, 21, 15, 9);
+  // The chin, which is the whole point of him.
+  g.fillStyle(0x6b3fa8, 1).fillRect(18, 20, 2, 5);
+  g.fillStyle(0x6b3fa8, 1).fillRect(24, 20, 2, 5);
+  g.fillStyle(0x2a0510, 1).fillEllipse(TS / 2 - 5, 12, 5, 3);
+  g.fillStyle(0x2a0510, 1).fillEllipse(TS / 2 + 5, 12, 5, 3);
+  g.fillStyle(0x6b3fa8, 1).fillRect(13, 8, 7, 2);
+  g.fillStyle(0x6b3fa8, 1).fillRect(24, 8, 7, 2);
+  // The gauntlet, with all six stones.
+  g.fillStyle(0xc98d13, 1).fillCircle(36, 31, 7.5);
+  g.fillStyle(0xffc93c, 1).fillCircle(36, 31, 6);
+  const stones = [0x9b5de5, 0xffc93c, 0xff4a5e, 0xff8a3c, 0x4ad9ff, 0x4ade80];
+  stones.forEach((c, i) => {
+    const a = (i / stones.length) * Math.PI * 2;
+    g.fillStyle(c, 1).fillCircle(36 + Math.cos(a) * 3.4, 31 + Math.sin(a) * 3.4, 1.3);
+  });
+  emit('thanos', TS, TS);
+
+  // --- star sword: a blade of planet-light, drawn in colour and left untinted
+  const SW = 26;
+  g.fillStyle(0xfff6cf, 0.35).fillCircle(SW / 2, SW / 2, 12);
+  g.fillStyle(0xfff6cf, 0.55).fillCircle(SW / 2, SW / 2, 8);
+  g.fillStyle(0xe8f4ff, 1).fillTriangle(SW / 2 - 3, 20, SW / 2 + 3, 20, SW / 2, 1);
+  g.fillStyle(0xffffff, 1).fillTriangle(SW / 2 - 1, 19, SW / 2 + 1, 19, SW / 2, 3);
+  g.fillStyle(0xffc93c, 1).fillRect(SW / 2 - 7, 19, 14, 3);
+  g.fillStyle(0xc98d13, 1).fillRect(SW / 2 - 2, 22, 4, 4);
+  emit('starsword', SW, SW);
 
   // --- coin
   g.fillStyle(0xffc93c, 1).fillCircle(7, 7, 6);
@@ -129,6 +185,50 @@ export function buildTextures(scene: Phaser.Scene): void {
     g.fillCircle(S / 2 + Math.cos(rad) * swingR, S / 2 + Math.sin(rad) * swingR, 3 + 5 * t);
   }
   emit('swing', S, S);
+
+  // --- crate: a tile-filling wooden box with corner posts and a brace
+  g.fillStyle(0x3d2a14, 1).fillRect(0, 0, TILE, TILE);
+  g.fillStyle(0x8a6229, 1).fillRect(1, 1, TILE - 2, TILE - 2);
+  g.fillStyle(0xa87a37, 1).fillRect(3, 3, TILE - 6, TILE - 6);
+  g.fillStyle(0x6b4a1f, 1).fillRect(3, TILE / 2 - 2, TILE - 6, 4);
+  // Diagonal brace, faked with a stack of short bars so it reads at 32px.
+  for (let i = 0; i < TILE - 8; i++) {
+    g.fillStyle(0x6b4a1f, 1).fillRect(4 + i, TILE - 5 - i, 3, 2);
+  }
+  g.fillStyle(0xc79a55, 1).fillRect(3, 3, TILE - 6, 2);
+  g.fillStyle(0x2a1c0d, 1).fillRect(0, TILE - 2, TILE, 2);
+  emit('crate', TILE, TILE);
+
+  // --- cute fluffy earmuffs: a headband and two pink pom-poms
+  const E = 26;
+  g.lineStyle(2.5, 0xd9d2e6, 1).beginPath();
+  g.arc(E / 2, 13, 9, Math.PI, 0, false);
+  g.strokePath();
+  // Fluff is drawn as a scatter of overlapping circles so the edge reads as fuzzy.
+  for (const cx of [5, E - 5]) {
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      g.fillStyle(0xff9ecb, 1).fillCircle(cx + Math.cos(a) * 2.6, 13 + Math.sin(a) * 2.6, 3.4);
+    }
+    g.fillStyle(0xffc3e0, 1).fillCircle(cx, 12, 3.2);
+    g.fillStyle(0xffe4f1, 1).fillCircle(cx - 1, 11, 1.6);
+  }
+  emit('earmuffs', E, 20);
+
+  // --- screech ring: a shockwave, built from dots for the same reason as the swing
+  const R = 96;
+  const ringR = R / 2 - 6;
+  for (let a = 0; a < 360; a += 5) {
+    const rad = Phaser.Math.DegToRad(a);
+    g.fillStyle(0xffffff, 0.9);
+    g.fillCircle(R / 2 + Math.cos(rad) * ringR, R / 2 + Math.sin(rad) * ringR, 3.2);
+  }
+  for (let a = 0; a < 360; a += 9) {
+    const rad = Phaser.Math.DegToRad(a);
+    g.fillStyle(0xffffff, 0.45);
+    g.fillCircle(R / 2 + Math.cos(rad) * (ringR - 9), R / 2 + Math.sin(rad) * (ringR - 9), 2.2);
+  }
+  emit('screechring', R, R);
 
   // --- soft particle for hits, pickups and portal glow
   g.fillStyle(0xffffff, 1).fillCircle(4, 4, 4);

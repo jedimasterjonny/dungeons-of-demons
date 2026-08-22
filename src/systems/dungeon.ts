@@ -1,4 +1,4 @@
-import { FLOOR, KEYS, TILE, WORLD, type MonsterKind } from './config';
+import { BOSS, FLOOR, KEYS, PLANET, TILE, WORLD, type MonsterKind } from './config';
 
 export const TileType = {
   Wall: 0,
@@ -36,6 +36,8 @@ export interface DungeonData {
   shop: Spawn;
   monsters: MonsterSpawn[];
   chests: Spawn[];
+  /** The Star Sword, on the planet floor only. */
+  sword?: Spawn;
 }
 
 /** Small deterministic RNG so a floor number always builds the same dungeon. */
@@ -89,8 +91,28 @@ export function worldToTile(v: number): number {
   return Math.floor(v / TILE);
 }
 
+/**
+ * A crate only goes on plain floor — never inside rock, a locked doorway, the shop
+ * pad or the exit portal, since blocking those could strand you.
+ */
+export function isCrateTile(grid: TileType[][], tx: number, ty: number): boolean {
+  return grid[ty]?.[tx] === TileType.Floor;
+}
+
+/** The one floor that is not in the castle at all: where Thanos waits. */
+export function isPlanetFloor(floor: number): boolean {
+  return floor === PLANET.floor;
+}
+
+/** Bosses stand on every tenth floor: 10, 20, 30, 40 and on down. */
+export function isBossFloor(floor: number): boolean {
+  return floor >= BOSS.everyNFloors && floor % BOSS.everyNFloors === 0;
+}
+
 /** How many monsters live on a given floor. */
 export function monsterCountFor(floor: number): number {
+  // The planet is an arena, not a dungeon: Thanos and a few stragglers.
+  if (isPlanetFloor(floor)) return PLANET.monsters;
   return Math.min(
     FLOOR.maxMonsters,
     FLOOR.baseMonsters + FLOOR.monstersPerFloor * (floor - 1)
@@ -169,7 +191,8 @@ export function generateDungeon(floor: number): DungeonData {
   // single door tile is provably the only way in and locking it can't block the exit.
   const vaults: Rect[] = [];
   const doors: Spawn[] = [];
-  const wantVaults = 1 + Math.min(2, Math.floor(floor / 3));
+  // No locked vaults on the planet — there is nothing out there to lock.
+  const wantVaults = isPlanetFloor(floor) ? 0 : 1 + Math.min(2, Math.floor(floor / 3));
 
   const tryVault = (): boolean => {
     const host = rng.pick(rooms.slice(1, Math.max(2, rooms.length - 1)));
@@ -268,11 +291,24 @@ export function generateDungeon(floor: number): DungeonData {
     monsters.push({ ...spotIn(r), kind: rng.pick(kinds) });
   }
 
+  // --- the boss, posted in the room with the portal so it guards the way out
+  if (isBossFloor(floor)) {
+    monsters.push({ ...spotIn(exitRoom), kind: 'boss' });
+  }
+  if (isPlanetFloor(floor)) {
+    monsters.push({ ...spotIn(exitRoom), kind: 'thanos' });
+  }
+
+  // --- the Star Sword, lying two tiles from where you land so it cannot be missed
+  const sword = isPlanetFloor(floor)
+    ? { x: playerStart.x + 2, y: playerStart.y }
+    : undefined;
+
   // --- chests: the reward for spending a key
   const chests: Spawn[] = vaults.map((v) => centerOf(v));
   for (const r of rng.shuffle(rooms.slice(1)).slice(0, 2)) {
     chests.push(spotIn(r));
   }
 
-  return { grid, rooms, vaults, doors, playerStart, exit, shop, monsters, chests };
+  return { grid, rooms, vaults, doors, playerStart, exit, shop, monsters, chests, sword };
 }

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { FLOOR, MONSTERS, type MonsterKind, type MonsterStats } from '../systems/config';
+import { damageFor, maxHpFor } from '../systems/combat';
+import { FLOOR, MONSTERS, SCREECH, type MonsterKind, type MonsterStats } from '../systems/config';
 
 export class Monster extends Phaser.Physics.Arcade.Sprite {
   readonly stats: MonsterStats;
@@ -14,6 +15,8 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
   private hitFlash = 0;
   private aggro = false;
   private bobSeed: number;
+  /** Counts down to the next scream. Staggered at spawn so a room never screams in unison. */
+  private screechCooldown: number;
 
   declare body: Phaser.Physics.Arcade.Body;
 
@@ -22,17 +25,16 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     this.kind = kind;
     this.stats = MONSTERS[kind];
 
-    const hpScale = 1 + FLOOR.hpScalePerFloor * (floor - 1);
-    const dmgScale = 1 + FLOOR.damageScalePerFloor * (floor - 1);
     const coinScale = 1 + FLOOR.coinScalePerFloor * (floor - 1);
 
-    this.maxHp = Math.round(this.stats.maxHp * hpScale);
+    this.maxHp = maxHpFor(this.stats, floor);
     this.hp = this.maxHp;
-    this.damage = Math.round(this.stats.damage * dmgScale);
+    this.damage = damageFor(this.stats, floor);
     this.coinValue = Math.round(
       Phaser.Math.Between(this.stats.coinDrop[0], this.stats.coinDrop[1]) * coinScale
     );
     this.bobSeed = Math.random() * Math.PI * 2;
+    this.screechCooldown = 1.5 + Math.random() * SCREECH.cooldown;
 
     scene.add.existing(this);
     scene.physics.add.existing(this);
@@ -50,6 +52,22 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     return this.aggro;
   }
 
+  get canScreech(): boolean {
+    return this.stats.screecher;
+  }
+
+  /**
+   * Plants its feet and screams. The scene listens for this and decides what the
+   * noise does to the player — that way earmuffs are checked in exactly one place.
+   */
+  private screech(): void {
+    this.screechCooldown = SCREECH.cooldown;
+    // Reuse the stun timer: it stops steering, so the scream is also your opening.
+    this.stunTimer = SCREECH.windUp;
+    this.body.setVelocity(0, 0);
+    this.scene.events.emit('screech', this);
+  }
+
   /** Returns true if this hit killed it. */
   takeDamage(amount: number, fromAngle: number): boolean {
     this.hp -= amount;
@@ -57,7 +75,8 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     this.stunTimer = 0.18;
     this.aggro = true;
 
-    const knock = this.kind === 'brute' ? 150 : 280;
+    // A boss barely rocks; a brute rocks a little; everything else flies.
+    const knock = this.stats.boss ? 55 : this.kind === 'brute' ? 150 : 280;
     this.body.setVelocity(Math.cos(fromAngle) * knock, Math.sin(fromAngle) * knock);
     return this.hp <= 0;
   }
@@ -65,8 +84,12 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
   tick(dt: number, target: Phaser.Math.Vector2): void {
     this.stunTimer = Math.max(0, this.stunTimer - dt);
     this.hitFlash = Math.max(0, this.hitFlash - dt);
+    this.screechCooldown = Math.max(0, this.screechCooldown - dt);
 
-    this.setTint(this.hitFlash > 0 ? 0xffffff : this.stats.tint);
+    // setTintFill flashes a solid silhouette, which reads on full-colour sprites too.
+    if (this.hitFlash > 0) this.setTintFill(0xffffff);
+    else if (this.stats.tint === 0xffffff) this.clearTint();
+    else this.setTint(this.stats.tint);
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, target.x, target.y);
     // Aggro is sticky: once it has seen you, it keeps coming.
@@ -75,6 +98,11 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     if (this.stunTimer > 0) return;
 
     if (this.aggro) {
+      if (this.stats.screecher && this.screechCooldown <= 0 && dist < SCREECH.range) {
+        this.screech();
+        return;
+      }
+
       const angle = Math.atan2(target.y - this.y, target.x - this.x);
       // Wraiths weave rather than beeline, which makes them harder to corner.
       const weave = this.kind === 'wraith' ? Math.sin(this.scene.time.now / 260 + this.bobSeed) * 0.5 : 0;
