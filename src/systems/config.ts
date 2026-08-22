@@ -35,7 +35,40 @@ export const PLAYER = {
   radius: 11,
 };
 
-export type MonsterKind = 'imp' | 'brute' | 'wraith';
+/**
+ * The boss that guards the portal on every tenth floor. Its health is a flat 100 —
+ * deliberately NOT scaled by floor like every other demon — so a deep boss is a glass
+ * cannon: it dies in five clean swings but hits harder every ten floors.
+ */
+export const BOSS = {
+  /** Floors that hold a boss: 10, 20, 30 and so on. */
+  everyNFloors: 10,
+  maxHp: 100,
+  name: 'Demon Lord',
+};
+
+/**
+ * Past the hundredth floor you step out of the castle and land somewhere else. The
+ * planet is one floor: an arena with no vaults, a handful of demons, and Thanos.
+ */
+export const PLANET = {
+  floor: 101,
+  name: 'The Weird Planet',
+  /** Thanos aside, the planet is not crowded. */
+  monsters: 8,
+  ground: 0xd98a5c,
+  walls: 0x8a6bd6,
+  sky: 0x0d0620,
+  /**
+   * The Star Sword, lying in the room you land in. It sets your swing to a flat 500,
+   * which turns 40,000 health from 571 swings into 80 — a fight rather than a wall.
+   * It belongs to the planet: you lose it the moment you leave.
+   */
+  swordName: 'Star Sword',
+  swordDamage: 500,
+};
+
+export type MonsterKind = 'imp' | 'brute' | 'wraith' | 'boss' | 'thanos';
 
 export interface MonsterStats {
   kind: MonsterKind;
@@ -46,6 +79,12 @@ export interface MonsterStats {
   radius: number;
   coinDrop: [number, number];
   tint: number;
+  /** Whether this demon can scream to weaken your swing. See SCREECH. */
+  screecher: boolean;
+  /** A boss. Its health AND damage are flat numbers that never scale with the floor. */
+  boss: boolean;
+  /** Shown on the boss health bar. */
+  label: string;
 }
 
 export const MONSTERS: Record<MonsterKind, MonsterStats> = {
@@ -58,6 +97,9 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     radius: 10,
     coinDrop: [40, 90],
     tint: 0xff6b4a,
+    screecher: false,
+    boss: false,
+    label: 'Imp',
   },
   brute: {
     kind: 'brute',
@@ -68,6 +110,9 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     radius: 15,
     coinDrop: [110, 190],
     tint: 0x9b5de5,
+    screecher: false,
+    boss: false,
+    label: 'Brute',
   },
   wraith: {
     kind: 'wraith',
@@ -78,7 +123,70 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     radius: 11,
     coinDrop: [80, 140],
     tint: 0x4ad9ff,
+    screecher: true,
+    boss: false,
+    label: 'Wraith',
   },
+  boss: {
+    kind: 'boss',
+    maxHp: BOSS.maxHp,
+    speed: 96,
+    // Flat, like its health. A boss that scaled damage would one-shot you by floor 90.
+    damage: 44,
+    aggroRange: 460,
+    radius: 20,
+    coinDrop: [600, 950],
+    tint: 0xff3b5c,
+    screecher: true,
+    boss: true,
+    label: BOSS.name,
+  },
+  thanos: {
+    kind: 'thanos',
+    maxHp: 40000,
+    speed: 76,
+    damage: 70,
+    /** He sees you the moment you land. */
+    aggroRange: 2000,
+    radius: 22,
+    coinDrop: [20000, 30000],
+    /** Drawn in full colour rather than white, so it is not tinted at all. */
+    tint: 0xffffff,
+    screecher: true,
+    boss: true,
+    label: 'Thanos',
+  },
+};
+
+/**
+ * The wraith's scream. It does no damage — it makes your swing feeble for a few
+ * seconds, which is worse. Cute Fluffy Earmuffs (a shop upgrade) muffle it, then
+ * block it outright.
+ */
+export const SCREECH = {
+  /** Fraction of your damage a screech takes away, before earmuffs. */
+  attackReduction: 0.4,
+  /** Seconds the weakness lasts, before earmuffs. */
+  duration: 5,
+  /** Seconds one demon waits between screams. */
+  cooldown: 7,
+  /** It only screams if you are this close. */
+  range: 250,
+  /** It plants its feet for this long to scream, which is your window to hit it. */
+  windUp: 0.45,
+};
+
+/**
+ * Crates. You carry a few onto every floor and drop them to make your own walls —
+ * a demon has to chew through one to reach you, and so do you to get back out.
+ */
+export const CRATES = {
+  /** Crates you start every floor with, before the shop adds more. */
+  startingCount: 3,
+  /** How much punishment one takes before it splinters. */
+  maxHp: 100,
+  /** A demon gnawing a crate deals its own damage, once per second. */
+  chewRate: 1,
 };
 
 export const FLOOR = {

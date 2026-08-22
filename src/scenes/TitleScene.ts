@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { CURRENCY, WORLD } from '../systems/config';
+import { BOSS, CRATES, CURRENCY, WORLD } from '../systems/config';
 import { gameState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
@@ -48,10 +48,12 @@ export class TitleScene extends Phaser.Scene {
       'Three demons slain forges one full key.',
       'Keys open the vaults. Only a cleared floor opens the way out.',
       `${CURRENCY.coinsPerGalaxyCoin.toLocaleString()} coins forge a single galaxy coin.`,
+      `${CRATES.startingCount} crates to a floor. Q drops one to hide behind.`,
+      `A ${BOSS.name} holds the portal on every ${BOSS.everyNFloors}th floor.`,
     ];
     rules.forEach((line, i) => {
       this.add
-        .text(W / 2, H / 2 + 4 + i * 20, line, {
+        .text(W / 2, H / 2 - 6 + i * 19, line, {
           fontFamily: FONT,
           fontSize: '13px',
           color: '#9c96ad',

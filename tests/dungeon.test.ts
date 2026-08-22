@@ -1,4 +1,4 @@
-import { generateDungeon, TileType, monsterCountFor } from '../src/systems/dungeon';
+import { generateDungeon, TileType, isBossFloor, isPlanetFloor, monsterCountFor } from '../src/systems/dungeon';
 import { KEYS, WORLD } from '../src/systems/config';
 
 let failures = 0;
@@ -24,9 +24,11 @@ function reachable(grid: number[][], start: { x: number; y: number }, throughDoo
   return seen;
 }
 
-console.log('Validating floors 1-25\n');
+console.log('Validating floors 1-25, plus 100 and the planet\n');
 
-for (let floor = 1; floor <= 25; floor++) {
+const FLOORS = [...Array(25).keys()].map((i) => i + 1).concat([100, 101]);
+
+for (const floor of FLOORS) {
   const d = generateDungeon(floor);
   const walkable = reachable(d.grid, d.playerStart, false);
   const withKeys = reachable(d.grid, d.playerStart, true);
@@ -68,11 +70,27 @@ for (let floor = 1; floor <= 25; floor++) {
     if (at(c) === TileType.Wall) fail(floor, `chest inside a wall at ${c.x},${c.y}`);
   }
 
-  const expected = monsterCountFor(floor);
+  // Boss floors carry one extra monster: the boss itself, in the portal room.
+  const bosses = d.monsters.filter((m) => m.kind === 'boss');
+  if (isBossFloor(floor) && bosses.length !== 1) fail(floor, `expected 1 boss, found ${bosses.length}`);
+  if (!isBossFloor(floor) && bosses.length !== 0) fail(floor, `boss on a non-boss floor`);
+  for (const b of bosses) {
+    if (!walkable.has(key(b))) fail(floor, `BOSS at ${b.x},${b.y} unreachable without keys — cannot clear floor`);
+  }
+
+  const titans = d.monsters.filter((m) => m.kind === 'thanos');
+  if (isPlanetFloor(floor) && titans.length !== 1) fail(floor, `expected Thanos, found ${titans.length}`);
+  if (!isPlanetFloor(floor) && titans.length !== 0) fail(floor, 'Thanos is loose in the castle');
+  for (const t of titans) {
+    if (!walkable.has(key(t))) fail(floor, `THANOS at ${t.x},${t.y} unreachable — cannot clear the planet`);
+  }
+
+  const expected = monsterCountFor(floor) + (isBossFloor(floor) || isPlanetFloor(floor) ? 1 : 0);
   const pad = String(floor).padStart(2);
   console.log(
     `  floor ${pad}: ${d.rooms.length} rooms, ${d.vaults.length} vault(s), ${d.doors.length} door(s), ` +
-      `${d.monsters.length}/${expected} monsters (${vaultMonsters} vaulted), ` +
+      `${d.monsters.length}/${expected} monsters (${vaultMonsters} vaulted)` +
+      `${bosses.length ? ' +BOSS' : ''}${titans.length ? ' +THANOS' : ''}, ` +
       `${keysEarnable} keys earnable, ${d.chests.length} chests`
   );
 }

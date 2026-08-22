@@ -3,6 +3,10 @@ import { CURRENCY, WORLD } from '../systems/config';
 import { UPGRADES, gameState, type Upgrade } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
+/** Row geometry, tuned so every upgrade plus the exchange line fits the panel. */
+const ROW_H = 30;
+const ROW_STEP = 34;
+const ROW_TOP = 86;
 
 interface Row {
   upgrade: Upgrade;
@@ -49,7 +53,7 @@ export class ShopScene extends Phaser.Scene {
     this.add.rectangle(panelX, 26, panelW, H - 52, 0x16121f, 1).setOrigin(0).setStrokeStyle(1, 0x4a3f66);
 
     this.add
-      .text(W / 2, 48, 'THE BLACK MARKET', {
+      .text(W / 2, 44, 'THE BLACK MARKET', {
         fontFamily: FONT,
         fontSize: '20px',
         fontStyle: 'bold',
@@ -58,10 +62,10 @@ export class ShopScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.coinText = this.add
-      .text(panelX + 22, 78, '', { fontFamily: FONT, fontSize: '13px', color: '#ffc93c' })
+      .text(panelX + 22, 72, '', { fontFamily: FONT, fontSize: '13px', color: '#ffc93c' })
       .setOrigin(0, 0.5);
     this.galaxyText = this.add
-      .text(panelX + panelW - 22, 78, '', {
+      .text(panelX + panelW - 22, 72, '', {
         fontFamily: FONT,
         fontSize: '13px',
         fontStyle: 'bold',
@@ -69,19 +73,19 @@ export class ShopScene extends Phaser.Scene {
       })
       .setOrigin(1, 0.5);
 
-    let y = 104;
+    let y = ROW_TOP;
     for (const upgrade of UPGRADES) {
       this.rows.push(this.buildRow(upgrade, panelX + 14, y, panelW - 28));
-      y += 46;
+      y += ROW_STEP;
     }
 
     // --- galaxy coin conversion, the one non-upgrade line in the shop
     const bg = this.add
-      .rectangle(panelX + 14, y + 6, panelW - 28, 38, 0x241f2e, 1)
+      .rectangle(panelX + 14, y + 6, panelW - 28, 32, 0x241f2e, 1)
       .setOrigin(0)
       .setStrokeStyle(1, 0x6b4a9f);
     const label = this.add
-      .text(panelX + 28, y + 25, '', { fontFamily: FONT, fontSize: '13px', color: '#c8a2ff' })
+      .text(panelX + 28, y + 22, '', { fontFamily: FONT, fontSize: '13px', color: '#c8a2ff' })
       .setOrigin(0, 0.5);
     this.convertRow = { bg, label };
 
@@ -98,6 +102,11 @@ export class ShopScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.events.on(Phaser.Scenes.Events.RESUME, this.refresh, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.events.off(Phaser.Scenes.Events.RESUME, this.refresh, this);
+    });
+
     this.bindInput();
     this.refresh();
     this.time.delayedCall(220, () => {
@@ -106,9 +115,9 @@ export class ShopScene extends Phaser.Scene {
   }
 
   private buildRow(upgrade: Upgrade, x: number, y: number, w: number): Row {
-    const bg = this.add.rectangle(x, y, w, 40, 0x1e1a2b, 1).setOrigin(0);
+    const bg = this.add.rectangle(x, y, w, ROW_H, 0x1e1a2b, 1).setOrigin(0);
     const name = this.add
-      .text(x + 14, y + 13, upgrade.name, {
+      .text(x + 14, y + 10, upgrade.name, {
         fontFamily: FONT,
         fontSize: '14px',
         fontStyle: 'bold',
@@ -116,10 +125,10 @@ export class ShopScene extends Phaser.Scene {
       })
       .setOrigin(0, 0.5);
     const desc = this.add
-      .text(x + 14, y + 29, '', { fontFamily: FONT, fontSize: '11px', color: '#9c96ad' })
+      .text(x + 14, y + 22, '', { fontFamily: FONT, fontSize: '11px', color: '#9c96ad' })
       .setOrigin(0, 0.5);
     const cost = this.add
-      .text(x + w - 14, y + 20, '', { fontFamily: FONT, fontSize: '13px', color: '#ffc93c' })
+      .text(x + w - 14, y + 15, '', { fontFamily: FONT, fontSize: '13px', color: '#ffc93c' })
       .setOrigin(1, 0.5);
     const pips = this.add.graphics();
     return { upgrade, bg, name, desc, cost, pips };
@@ -161,7 +170,9 @@ export class ShopScene extends Phaser.Scene {
     const row = this.rows[this.selected];
     const level = gameState.level(row.upgrade.id);
 
-    if (level >= row.upgrade.maxLevel) {
+    if (row.upgrade.id === 'avatar' && gameState.canChangeAvatar) {
+      this.openWardrobe();
+    } else if (level >= row.upgrade.maxLevel) {
       this.flash(`${row.upgrade.name} is fully upgraded`, '#9c96ad');
     } else if (gameState.buy(row.upgrade)) {
       this.flash(`${row.upgrade.name} → level ${gameState.level(row.upgrade.id)}`, '#4ade80');
@@ -176,6 +187,12 @@ export class ShopScene extends Phaser.Scene {
       );
     }
     this.refresh();
+  }
+
+  private openWardrobe(): void {
+    if (this.scene.isActive('Avatar')) return;
+    this.scene.pause();
+    this.scene.launch('Avatar', { returnTo: 'Shop' });
   }
 
   private flash(message: string, color: string): void {
@@ -195,16 +212,24 @@ export class ShopScene extends Phaser.Scene {
       const active = i === this.selected;
       const affordable = gameState.canAfford(upgrade);
 
+      const wardrobe = upgrade.id === 'avatar' && gameState.canChangeAvatar;
+
       row.bg.setFillStyle(active ? 0x2f2743 : 0x1e1a2b, 1);
       row.bg.setStrokeStyle(active ? 2 : 1, active ? 0xffd15c : 0x342c47);
-      row.name.setColor(maxed ? '#7d7a8c' : '#ffffff');
-      row.desc.setText(maxed ? 'Maxed out' : upgrade.describe(level));
+      row.name.setColor(maxed && !wardrobe ? '#7d7a8c' : '#ffffff');
+      row.desc.setText(
+        wardrobe
+          ? `Wearing ${gameState.avatarName} — ENTER to change`
+          : maxed
+            ? 'Maxed out'
+            : upgrade.describe(level)
+      );
 
       const cost = upgrade.cost(level);
       row.cost.setText(
-        maxed ? '—' : upgrade.tier === 'coin' ? `${cost.toLocaleString()}` : `◈ ${cost}`
+        wardrobe ? 'open' : maxed ? '—' : upgrade.tier === 'coin' ? `${cost.toLocaleString()}` : `◈ ${cost}`
       );
-      row.cost.setColor(maxed ? '#4a4658' : affordable ? (upgrade.tier === 'coin' ? '#ffc93c' : '#c8a2ff') : '#6b5a5a');
+      row.cost.setColor(wardrobe ? '#c8a2ff' : maxed ? '#4a4658' : affordable ? (upgrade.tier === 'coin' ? '#ffc93c' : '#c8a2ff') : '#6b5a5a');
 
       // Level pips sit just left of the cost.
       row.pips.clear();
@@ -213,7 +238,7 @@ export class ShopScene extends Phaser.Scene {
         const filled = l < level;
         row.pips
           .fillStyle(filled ? (upgrade.tier === 'coin' ? 0xffc93c : 0xc8a2ff) : 0xffffff, filled ? 1 : 0.14)
-          .fillRect(px - (upgrade.maxLevel - l) * 7, row.bg.y + 17, 4, 7);
+          .fillRect(px - (upgrade.maxLevel - l) * 7, row.bg.y + 12, 4, 7);
       }
     });
 

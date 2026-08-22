@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { avatarTexture } from '../systems/avatars';
 import { PLAYER } from '../systems/config';
 import { gameState } from '../systems/state';
 
@@ -12,12 +13,17 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   declare body: Phaser.Physics.Arcade.Body;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
-    super(scene, x, y, 'player');
+    super(scene, x, y, avatarTexture(gameState.avatar));
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.setDepth(20);
     this.body.setCircle(PLAYER.radius, this.width / 2 - PLAYER.radius, this.height / 2 - PLAYER.radius + 3);
     this.body.setCollideWorldBounds(true);
+  }
+
+  /** Puts on whatever avatar is currently chosen. Same size, so nothing else moves. */
+  refreshAvatar(): void {
+    this.setTexture(avatarTexture(gameState.avatar));
   }
 
   get hp(): number {
@@ -80,6 +86,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.attackTimer = Math.max(0, this.attackTimer - dt);
     this.invulnTimer = Math.max(0, this.invulnTimer - dt);
     this.hurtFlash = Math.max(0, this.hurtFlash - dt);
+    // A screech wears off while you play, so it lives on the timer, not on a flag.
+    gameState.screechTimer = Math.max(0, gameState.screechTimer - dt);
 
     if (this.hurtFlash > 0) {
       this.setTint(0xff4444);

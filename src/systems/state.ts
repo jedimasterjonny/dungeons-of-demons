@@ -1,10 +1,14 @@
-import { CURRENCY, KEYS, PLAYER } from './config';
+import { AVATARS, DEFAULT_AVATAR, avatarName, isAvatarId } from './avatars';
+import { CRATES, CURRENCY, KEYS, PLANET, PLAYER, SCREECH } from './config';
 
 export type UpgradeId =
   | 'vitality'
   | 'edge'
   | 'swiftness'
   | 'frenzy'
+  | 'crates'
+  | 'earmuffs'
+  | 'avatar'
   | 'greed'
   | 'harvest'
   | 'revenant';
@@ -56,6 +60,31 @@ export const UPGRADES: Upgrade[] = [
     describe: () => '-7% swing cooldown',
   },
   {
+    id: 'crates',
+    name: 'Crate',
+    tier: 'coin',
+    maxLevel: 3,
+    cost: () => 4000,
+    describe: (l) =>
+      `Carry one more crate per floor  (${CRATES.startingCount + l} -> ${CRATES.startingCount + l + 1})`,
+  },
+  {
+    id: 'earmuffs',
+    name: 'Cute Fluffy Earmuffs',
+    tier: 'coin',
+    maxLevel: 1,
+    cost: () => 6000,
+    describe: () => 'Demon screeches cannot weaken your swing at all',
+  },
+  {
+    id: 'avatar',
+    name: 'Avatar',
+    tier: 'coin',
+    maxLevel: 1,
+    cost: () => 9000,
+    describe: () => `Be anything you like — unlocks all ${AVATARS.length} looks`,
+  },
+  {
     id: 'greed',
     name: 'Greed',
     tier: 'galaxy',
@@ -87,6 +116,7 @@ export interface SaveData {
   floor: number;
   deepestFloor: number;
   upgrades: Partial<Record<UpgradeId, number>>;
+  avatar: string;
 }
 
 const SAVE_KEY = 'dungeons-of-demons/save/v1';
@@ -94,7 +124,7 @@ const SAVE_KEY = 'dungeons-of-demons/save/v1';
 const LEGACY_SAVE_KEYS = ['dungeons-and-demons/save/v1'];
 
 function emptySave(): SaveData {
-  return { coins: 0, galaxyCoins: 0, floor: 1, deepestFloor: 1, upgrades: {} };
+  return { coins: 0, galaxyCoins: 0, floor: 1, deepestFloor: 1, upgrades: {}, avatar: DEFAULT_AVATAR };
 }
 
 /**
@@ -107,6 +137,8 @@ export class GameState {
   floor = 1;
   deepestFloor = 1;
   upgrades: Partial<Record<UpgradeId, number>> = {};
+  /** What you look like. Cosmetic only — every avatar has the same hitbox. */
+  avatar = DEFAULT_AVATAR;
 
   /** Carried between floors so the shop can heal you and the HUD stays honest. */
   hp = PLAYER.baseMaxHp;
@@ -115,6 +147,12 @@ export class GameState {
   /** Whole keys in hand. Run-scoped: spent on locked doors, never saved. */
   keys = 0;
   revenantUsed = false;
+  /** Seconds left on a demon's screech. Run-scoped, and never saved. */
+  screechTimer = 0;
+  /** Crates in hand. Restocked at the start of every floor, never saved. */
+  crates = 0;
+  /** Holding the Star Sword. Planet-only: dropped the moment you leave that floor. */
+  hasStarSword = false;
 
   constructor() {
     this.load();
@@ -129,8 +167,29 @@ export class GameState {
     return PLAYER.baseMaxHp + this.level('vitality') * 15;
   }
 
+  /**
+   * What a swing hits for. The Star Sword replaces your damage outright rather than
+   * adding to it, so it is worth exactly the same to a new player as to a maxed one.
+   * A screech still takes its cut — earmuffs matter even holding a star.
+   */
   get damage(): number {
-    return PLAYER.baseDamage + this.level('edge') * 5;
+    const base = this.hasStarSword
+      ? PLANET.swordDamage
+      : PLAYER.baseDamage + this.level('edge') * 5;
+    return Math.round(base * this.screechDamageMultiplier);
+  }
+
+  /** Earmuffs are all-or-nothing: one pair and screeches stop mattering. */
+  get blocksScreech(): boolean {
+    return this.level('earmuffs') > 0;
+  }
+
+  get isScreeched(): boolean {
+    return this.screechTimer > 0 && !this.blocksScreech;
+  }
+
+  get screechDamageMultiplier(): number {
+    return this.isScreeched ? 1 - SCREECH.attackReduction : 1;
   }
 
   get speed(): number {
@@ -147,6 +206,28 @@ export class GameState {
 
   get fragmentsPerKill(): number {
     return 1 + this.level('harvest');
+  }
+
+  /** How many crates you walk onto each new floor with. */
+  get cratesPerFloor(): number {
+    return CRATES.startingCount + this.level('crates');
+  }
+
+  /** The wardrobe is one purchase; after that every look is free to switch to. */
+  get canChangeAvatar(): boolean {
+    return this.level('avatar') > 0;
+  }
+
+  get avatarName(): string {
+    return avatarName(this.avatar);
+  }
+
+  /** Refuses unknown looks, and refuses everything until the wardrobe is bought. */
+  setAvatar(id: string): boolean {
+    if (!this.canChangeAvatar || !isAvatarId(id)) return false;
+    this.avatar = id;
+    this.save();
+    return true;
   }
 
   get hasRevenant(): boolean {
@@ -211,6 +292,7 @@ export class GameState {
       floor: this.floor,
       deepestFloor: this.deepestFloor,
       upgrades: this.upgrades,
+      avatar: this.avatar,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -247,6 +329,8 @@ export class GameState {
     this.floor = data.floor;
     this.deepestFloor = data.deepestFloor;
     this.upgrades = data.upgrades ?? {};
+    // A look from an older save that no longer exists falls back to the delver.
+    this.avatar = isAvatarId(data.avatar) ? data.avatar : DEFAULT_AVATAR;
   }
 
   reset(): void {
@@ -256,9 +340,13 @@ export class GameState {
     this.floor = fresh.floor;
     this.deepestFloor = fresh.deepestFloor;
     this.upgrades = {};
+    this.avatar = DEFAULT_AVATAR;
     this.fragments = 0;
     this.keys = 0;
     this.revenantUsed = false;
+    this.screechTimer = 0;
+    this.crates = 0;
+    this.hasStarSword = false;
     this.hp = this.maxHp;
     this.save();
   }
