@@ -79,7 +79,10 @@ export class GameOverScene extends Phaser.Scene {
   private restartFloor(): void {
     this.input.keyboard!.removeAllListeners();
     // A death costs coins and progress on this floor, never your upgrades.
-    gameState.hp = gameState.maxHp;
+    for (const p of gameState.players) {
+      p.refreshForFloor();
+      p.hp = p.maxHp;
+    }
     gameState.keys = 0;
     gameState.fragments = 0;
     this.scene.start('Dungeon');

@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { AVATARS, avatarTexture } from '../systems/avatars';
 import { WORLD } from '../systems/config';
-import { gameState } from '../systems/state';
+import { gameState, type PlayerState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
 const COLS = 5;
@@ -23,6 +23,8 @@ export class AvatarScene extends Phaser.Scene {
   private cells: Cell[] = [];
   private selected = 0;
   private returnTo = 'Shop';
+  /** Whoever opened the wardrobe. In co-op each player dresses themselves. */
+  private wearer!: PlayerState;
   private nameText!: Phaser.GameObjects.Text;
   /** Stops the ENTER that opened this screen from instantly picking something. */
   private ready = false;
@@ -31,12 +33,13 @@ export class AvatarScene extends Phaser.Scene {
     super('Avatar');
   }
 
-  init(data: { returnTo?: string }): void {
+  init(data: { returnTo?: string; wearerIndex?: number }): void {
     this.returnTo = data.returnTo ?? 'Shop';
+    this.wearer = gameState.players[data.wearerIndex ?? 0] ?? gameState.me;
     this.cells = [];
     this.selected = Math.max(
       0,
-      AVATARS.findIndex((a) => a.id === gameState.avatar)
+      AVATARS.findIndex((a) => a.id === this.wearer.avatar)
     );
     this.ready = false;
   }
@@ -136,7 +139,7 @@ export class AvatarScene extends Phaser.Scene {
   private wear(): void {
     if (!this.ready) return;
     const avatar = AVATARS[this.selected];
-    if (gameState.setAvatar(avatar.id)) {
+    if (gameState.setAvatar(avatar.id, this.wearer)) {
       this.cameras.main.flash(160, 120, 200, 255);
       const cell = this.cells[this.selected];
       this.tweens.add({
@@ -152,7 +155,7 @@ export class AvatarScene extends Phaser.Scene {
   private refresh(): void {
     this.cells.forEach((cell, i) => {
       const active = i === this.selected;
-      const worn = cell.id === gameState.avatar;
+      const worn = cell.id === this.wearer.avatar;
       cell.bg.setFillStyle(active ? 0x2f2743 : 0x1e1a2b, 1);
       cell.bg.setStrokeStyle(active ? 2 : 1, active ? 0xffd15c : worn ? 0x4ade80 : 0x342c47);
       cell.worn.setVisible(worn);
@@ -160,7 +163,7 @@ export class AvatarScene extends Phaser.Scene {
     });
 
     const avatar = AVATARS[this.selected];
-    const worn = avatar.id === gameState.avatar;
+    const worn = avatar.id === this.wearer.avatar;
     this.nameText
       .setText(worn ? `${avatar.name} — worn` : `${avatar.name} — ENTER to wear`)
       .setColor(worn ? '#4ade80' : '#ffe9a8');

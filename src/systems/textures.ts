@@ -230,6 +230,41 @@ export function buildTextures(scene: Phaser.Scene): void {
   }
   emit('screechring', R, R);
 
+  // --- light: the glow ERASED out of the darkness on a dark floor. Built outside-in,
+  // each ring adding just enough alpha to hit a target opacity, because a flat circle
+  // would erase as a hard-edged spotlight with a visible cut line.
+  //
+  // Two profiles, because the two sheets of darkness want opposite things. The torch
+  // you carry feathers away over most of its radius, which is what makes a pool of
+  // light. The trail burnt into the memory sheet is almost solid: it answers "have I
+  // walked here", and a soft trail would multiply against the torch and leave even the
+  // ground under your feet looking half-lit.
+  const L = 256;
+  const lightR = L / 2;
+  const glow = (key: string, solidTo: number) => {
+    let opacity = 0;
+    for (let r = lightR; r > 0 && opacity < 0.999; r -= 2) {
+      // 0 at the rim, 1 at the middle; fully opaque from solidTo inward.
+      const t = 1 - r / lightR;
+      const target = Math.min(1, t / (1 - solidTo));
+      const step = (target - opacity) / (1 - opacity);
+      if (step <= 0) continue;
+      g.fillStyle(0xffffff, step).fillCircle(lightR, lightR, r);
+      opacity = target;
+    }
+    emit(key, L, L);
+  };
+  glow('light', 0.45);
+  glow('lighttrail', 0.82);
+
+  // --- foot ring: who is who in co-op. A ring under the feet rather than a tint on
+  // the sprite, because avatars are drawn in full colour and tinting one green turns
+  // a pizza into a swamp. Drawn white and tinted per player.
+  const FR = 30;
+  g.lineStyle(2.5, 0xffffff, 1).strokeEllipse(FR / 2, FR / 2, FR - 5, (FR - 5) * 0.45);
+  g.fillStyle(0xffffff, 0.18).fillEllipse(FR / 2, FR / 2, FR - 7, (FR - 7) * 0.45);
+  emit('footring', FR, FR);
+
   // --- soft particle for hits, pickups and portal glow
   g.fillStyle(0xffffff, 1).fillCircle(4, 4, 4);
   emit('spark', 8, 8);

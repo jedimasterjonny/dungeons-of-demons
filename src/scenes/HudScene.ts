@@ -1,29 +1,43 @@
 import Phaser from 'phaser';
-import { BOSS, PLANET, SCREECH, WORLD } from '../systems/config';
-import { gameState } from '../systems/state';
+import { BOSS, COOP, PLANET, SCREECH, WORLD } from '../systems/config';
+import { isDarkFloor } from '../systems/dungeon';
+import { gameState, type PlayerState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
 
+/**
+ * One player's corner of the HUD: health, crates, ears, and the Star Sword on the
+ * one floor you can be holding it. Two players get one of these each, stacked, which
+ * is why the strip is taller in co-op — the single row was already full.
+ */
+interface Card {
+  bar: Phaser.GameObjects.Graphics;
+  tag: Phaser.GameObjects.Text;
+  hp: Phaser.GameObjects.Text;
+  crateIcon: Phaser.GameObjects.Image;
+  crateText: Phaser.GameObjects.Text;
+  earIcon: Phaser.GameObjects.Image;
+  swordIcon: Phaser.GameObjects.Image;
+  status: Phaser.GameObjects.Text;
+}
+
+const CARD_H = 34;
+const BAR_W = 186;
+
 /** Overlay scene drawn on top of the dungeon. Reads shared state every frame. */
 export class HudScene extends Phaser.Scene {
-  private hpBar!: Phaser.GameObjects.Graphics;
-  private hpText!: Phaser.GameObjects.Text;
+  private cards: Card[] = [];
+  private stripH = 62;
   private floorText!: Phaser.GameObjects.Text;
   private monsterText!: Phaser.GameObjects.Text;
   private keyText!: Phaser.GameObjects.Text;
+  private keyIcon!: Phaser.GameObjects.Image;
   private fragPips!: Phaser.GameObjects.Graphics;
   private coinText!: Phaser.GameObjects.Text;
   private galaxyText!: Phaser.GameObjects.Text;
   private galaxyBar!: Phaser.GameObjects.Graphics;
   private bossBar!: Phaser.GameObjects.Graphics;
   private bossLabel!: Phaser.GameObjects.Text;
-  private crateText!: Phaser.GameObjects.Text;
-  private crateIcon!: Phaser.GameObjects.Image;
-  private swordIcon!: Phaser.GameObjects.Image;
-  private swordText!: Phaser.GameObjects.Text;
-  private screechText!: Phaser.GameObjects.Text;
-  private earmuffIcon!: Phaser.GameObjects.Image;
-  private earmuffLabel!: Phaser.GameObjects.Text;
 
   constructor() {
     super({ key: 'Hud', active: false });
@@ -31,57 +45,31 @@ export class HudScene extends Phaser.Scene {
 
   create(): void {
     const W = WORLD.viewWidth;
+    const coop = gameState.isCoop;
+    this.cards = [];
+    // One card fits in the old 62px strip; two need the room, so the strip grows
+    // and everything hung beneath it (the boss bar) moves down with it.
+    this.stripH = coop ? 8 + gameState.players.length * CARD_H : 62;
 
-    this.add.rectangle(0, 0, W, 62, 0x000000, 0.55).setOrigin(0);
-    this.add.rectangle(0, 62, W, 1, 0xffffff, 0.12).setOrigin(0);
+    this.add.rectangle(0, 0, W, this.stripH, 0x000000, 0.55).setOrigin(0);
+    this.add.rectangle(0, this.stripH, W, 1, 0xffffff, 0.12).setOrigin(0);
 
-    // --- health
-    this.hpBar = this.add.graphics();
-    this.hpText = this.add
-      .text(16, 30, '', { fontFamily: FONT, fontSize: '12px', color: '#ffffff' })
-      .setOrigin(0, 0.5);
+    gameState.players.forEach((_, i) => {
+      this.cards.push(this.buildCard(i, coop ? 10 + i * CARD_H : 12, coop));
+    });
 
-    // --- keys and fragments
-    this.add.image(238, 22, 'key').setScale(0.9);
+    // --- keys and fragments. Shared by the party: one pot of keys, one set of pips.
+    const keyX = coop ? 300 : 238;
+    const keyY = coop ? this.stripH / 2 : 22;
+    this.keyIcon = this.add.image(keyX, keyY, 'key').setScale(0.9);
     this.keyText = this.add
-      .text(256, 22, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#ffd15c' })
+      .text(keyX + 18, keyY, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#ffd15c' })
       .setOrigin(0, 0.5);
     this.fragPips = this.add.graphics();
 
-    // --- crates in hand
-    this.crateIcon = this.add.image(340, 22, 'crate').setScale(0.55);
-    this.crateText = this.add
-      .text(356, 22, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#c79a55' })
-      .setOrigin(0, 0.5);
-
-    // --- the Star Sword, on the one floor you can be holding it
-    // Second row, clear of the floor title: the top row is already full.
-    this.swordIcon = this.add.image(238, 48, 'starsword').setScale(0.7).setVisible(false);
-    this.swordText = this.add
-      .text(252, 48, '', { fontFamily: FONT, fontSize: '13px', fontStyle: 'bold', color: '#fff6cf' })
-      .setOrigin(0, 0.5)
-      .setVisible(false);
-
-    // --- how your ears are doing, under the health bar. Screeched and muffled are
-    // mutually exclusive by definition, so they share the one line.
-    this.screechText = this.add
-      .text(16, 48, '', { fontFamily: FONT, fontSize: '11px', fontStyle: 'bold', color: '#ff8a8a' })
-      .setOrigin(0, 0.5)
-      .setVisible(false);
-    this.earmuffIcon = this.add.image(24, 48, 'earmuffs').setScale(0.7).setVisible(false);
-    this.earmuffLabel = this.add
-      .text(40, 48, 'screeches blocked', { fontFamily: FONT, fontSize: '11px', color: '#ff9ecb' })
-      .setOrigin(0, 0.5)
-      .setVisible(false);
-
     // --- floor and demons remaining
     this.floorText = this.add
-      .text(W / 2, 16, '', {
-        fontFamily: FONT,
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-      })
+      .text(W / 2, 16, '', { fontFamily: FONT, fontSize: '16px', fontStyle: 'bold', color: '#ffffff' })
       .setOrigin(0.5, 0);
     this.monsterText = this.add
       .text(W / 2, 38, '', { fontFamily: FONT, fontSize: '12px', color: '#ff8a8a' })
@@ -90,7 +78,7 @@ export class HudScene extends Phaser.Scene {
     // --- boss bar, hung just under the HUD strip on boss floors
     this.bossBar = this.add.graphics();
     this.bossLabel = this.add
-      .text(W / 2, 76, '', {
+      .text(W / 2, this.stripH + 14, '', {
         fontFamily: FONT,
         fontSize: '12px',
         fontStyle: 'bold',
@@ -99,45 +87,103 @@ export class HudScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setVisible(false);
 
-    // --- currency
+    // --- currency, shared by the party
     this.add.image(W - 178, 18, 'coin');
     this.coinText = this.add
       .text(W - 166, 18, '0', { fontFamily: FONT, fontSize: '15px', color: '#ffc93c' })
       .setOrigin(0, 0.5);
-
     this.galaxyText = this.add
-      .text(W - 16, 18, '', {
-        fontFamily: FONT,
-        fontSize: '15px',
-        fontStyle: 'bold',
-        color: '#c8a2ff',
-      })
+      .text(W - 16, 18, '', { fontFamily: FONT, fontSize: '15px', fontStyle: 'bold', color: '#c8a2ff' })
       .setOrigin(1, 0.5);
     this.galaxyBar = this.add.graphics();
 
-    this.add
-      .text(W - 16, 46, 'WASD move · SPACE attack · Q crate · E interact', {
+    // Two short lines in co-op rather than one long one: a single line wide enough
+    // for both control sets runs straight into the demon counter in the middle.
+    const hint = { fontFamily: FONT, fontSize: '10px', color: '#7d7a8c' };
+    if (coop) {
+      this.add.text(W - 16, 44, 'P1  WASD · SPACE · Q', { ...hint, color: '#9a9080' }).setOrigin(1, 0.5);
+      this.add.text(W - 16, 58, 'P2  arrows · ENTER · SHIFT', { ...hint, color: '#6f9a88' }).setOrigin(1, 0.5);
+    } else {
+      this.add.text(W - 16, 46, 'WASD move · SPACE attack · Q crate · E interact', hint).setOrigin(1, 0.5);
+    }
+  }
+
+  private buildCard(index: number, y: number, coop: boolean): Card {
+    const barX = coop ? 38 : 14;
+    const tag = this.add
+      .text(14, y + 7, `P${index + 1}`, {
         fontFamily: FONT,
-        fontSize: '10px',
-        color: '#7d7a8c',
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: index === 0 ? '#ffffff' : '#8affc9',
       })
-      .setOrigin(1, 0.5);
+      .setOrigin(0, 0.5)
+      .setVisible(coop);
+
+    const bar = this.add.graphics();
+    const hp = this.add
+      .text(barX + 2, y + 22, '', { fontFamily: FONT, fontSize: '11px', color: '#ffffff' })
+      .setOrigin(0, 0.5);
+
+    const crateIcon = this.add.image(barX + 78, y + 22, 'crate').setScale(0.45);
+    const crateText = this.add
+      .text(barX + 88, y + 22, '0', { fontFamily: FONT, fontSize: '12px', fontStyle: 'bold', color: '#c79a55' })
+      .setOrigin(0, 0.5);
+
+    const earIcon = this.add.image(barX + 112, y + 22, 'earmuffs').setScale(0.5).setVisible(false);
+    const swordIcon = this.add.image(barX + 132, y + 22, 'starsword').setScale(0.5).setVisible(false);
+
+    const status = this.add
+      .text(barX + 148, y + 22, '', { fontFamily: FONT, fontSize: '10px', fontStyle: 'bold', color: '#ff8a8a' })
+      .setOrigin(0, 0.5);
+
+    return { bar, tag, hp, crateIcon, crateText, earIcon, swordIcon, status };
+  }
+
+  private drawCard(card: Card, who: PlayerState, index: number, coop: boolean): void {
+    const y = coop ? 10 + index * CARD_H : 12;
+    const barX = coop ? 38 : 14;
+
+    const pct = Phaser.Math.Clamp(who.hp / who.maxHp, 0, 1);
+    card.bar.clear();
+    card.bar.fillStyle(0x2a1520, 1).fillRoundedRect(barX, y, BAR_W, 14, 4);
+    // A downed player's bar goes grey and empty: the bar itself is the alarm.
+    const color = who.downed ? 0x6b6478 : pct > 0.5 ? 0x4ade80 : pct > 0.25 ? 0xffc93c : 0xff4a5e;
+    if (pct > 0) {
+      card.bar.fillStyle(color, 1).fillRoundedRect(barX + 1, y + 1, Math.max(3, (BAR_W - 2) * pct), 12, 3);
+    }
+    if (who.downed) {
+      // Rescue progress, drawn straight over the empty bar.
+      const p = Phaser.Math.Clamp(who.rescueProgress / COOP.rescueTime, 0, 1);
+      card.bar.fillStyle(0x8affc9, 1).fillRoundedRect(barX + 1, y + 1, Math.max(2, (BAR_W - 2) * p), 12, 3);
+    }
+
+    card.hp.setText(`${Math.max(0, Math.ceil(who.hp))} / ${who.maxHp}`);
+    card.crateText.setText(`${who.crates}`).setColor(who.crates > 0 ? '#c79a55' : '#5c5468');
+    card.crateIcon.setAlpha(who.crates > 0 ? 1 : 0.3);
+    card.earIcon.setVisible(who.blocksScreech);
+    card.swordIcon.setVisible(who.hasStarSword);
+
+    if (who.downed) {
+      card.status.setText('DOWN').setColor('#8affc9');
+    } else if (who.isScreeched) {
+      card.status.setText(`-${Math.round(SCREECH.attackReduction * 100)}%  ${who.screechTimer.toFixed(1)}s`).setColor('#ff8a8a');
+    } else if (who.hasStarSword) {
+      card.status.setText(`${PLANET.swordDamage}`).setColor('#fff6cf');
+    } else {
+      card.status.setText('');
+    }
   }
 
   override update(): void {
     const W = WORLD.viewWidth;
+    const coop = gameState.isCoop;
     const monstersLeft = (this.registry.get('monstersLeft') as number) ?? 0;
     const fragsPerKey = (this.registry.get('fragmentsPerKey') as number) ?? 3;
 
-    // --- health bar
-    const pct = Phaser.Math.Clamp(gameState.hp / gameState.maxHp, 0, 1);
-    this.hpBar.clear();
-    this.hpBar.fillStyle(0x2a1520, 1).fillRoundedRect(14, 12, 200, 14, 4);
-    const color = pct > 0.5 ? 0x4ade80 : pct > 0.25 ? 0xffc93c : 0xff4a5e;
-    if (pct > 0) {
-      this.hpBar.fillStyle(color, 1).fillRoundedRect(15, 13, Math.max(3, 198 * pct), 12, 3);
-    }
-    this.hpText.setText(`${Math.max(0, Math.ceil(gameState.hp))} / ${gameState.maxHp}`);
+    gameState.players.forEach((who, i) => {
+      if (this.cards[i]) this.drawCard(this.cards[i], who, i, coop);
+    });
 
     // --- keys, with pips for the fragments toward the next one
     this.keyText.setText(`${gameState.keys}`);
@@ -146,33 +192,15 @@ export class HudScene extends Phaser.Scene {
       const filled = i < gameState.fragments;
       this.fragPips
         .fillStyle(filled ? 0xffd15c : 0xffffff, filled ? 1 : 0.16)
-        .fillCircle(288 + i * 13, 22, 4.5);
+        .fillCircle(this.keyText.x + 22 + i * 13, this.keyIcon.y, 4.5);
     }
 
-    // --- crates: greyed out once the stack is empty
-    this.crateText.setText(`${gameState.crates}`).setColor(gameState.crates > 0 ? '#c79a55' : '#5c5468');
-    this.crateIcon.setAlpha(gameState.crates > 0 ? 1 : 0.3);
-
-    // --- star sword
-    this.swordIcon.setVisible(gameState.hasStarSword);
-    this.swordText.setVisible(gameState.hasStarSword).setText(`${PLANET.swordDamage}`);
-
-    // --- screech and earmuffs
-    const muffed = gameState.blocksScreech;
-    this.earmuffIcon.setVisible(muffed);
-    this.earmuffLabel.setVisible(muffed);
-
-    if (gameState.isScreeched) {
-      this.screechText
-        .setText(
-          `SCREECHED!  attack -${Math.round(SCREECH.attackReduction * 100)}%  (${gameState.screechTimer.toFixed(1)}s)`
-        )
-        .setVisible(true);
-    } else {
-      this.screechText.setVisible(false);
-    }
-
-    this.floorText.setText(`FLOOR ${gameState.floor}`);
+    // Marked on the title rather than given its own indicator: the second row is
+    // already carrying the ears and the sword, and the black screen says it louder.
+    const dark = isDarkFloor(gameState.floor);
+    this.floorText
+      .setText(dark ? `FLOOR ${gameState.floor}  ·  DARK` : `FLOOR ${gameState.floor}`)
+      .setColor(dark ? '#a99cff' : '#ffffff');
     this.monsterText
       .setText(
         monstersLeft === 0
@@ -191,10 +219,11 @@ export class HudScene extends Phaser.Scene {
       this.bossLabel.setText(`${name}   ${bossHp.toLocaleString()} / ${bossMax.toLocaleString()}`);
       const bw = 300;
       const bx = W / 2 - bw / 2;
-      this.bossBar.fillStyle(0x2a0d16, 0.9).fillRoundedRect(bx, 88, bw, 12, 4);
+      const by = this.stripH + 26;
+      this.bossBar.fillStyle(0x2a0d16, 0.9).fillRoundedRect(bx, by, bw, 12, 4);
       this.bossBar
         .fillStyle(0xff3b5c, 1)
-        .fillRoundedRect(bx + 2, 90, Math.max(3, (bw - 4) * (bossHp / bossMax)), 8, 3);
+        .fillRoundedRect(bx + 2, by + 2, Math.max(3, (bw - 4) * (bossHp / bossMax)), 8, 3);
     }
 
     this.coinText.setText(`${gameState.coins.toLocaleString()}`);
