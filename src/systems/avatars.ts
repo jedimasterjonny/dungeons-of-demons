@@ -185,7 +185,9 @@ export const AVATARS: Avatar[] = [
         const a = -Math.PI / 2 + (i * Math.PI) / 5;
         pts.push({ x: 13 + Math.cos(a) * r, y: 12 + Math.sin(a) * r });
       }
-      g.fillStyle(0xffc93c, 1).fillPoints(pts, true);
+      // Phaser 4 types this as Vector2[], but it only reads x and y. A cast rather than
+      // new Vector2(), which would pull Phaser into the Node-run tests at runtime.
+      g.fillStyle(0xffc93c, 1).fillPoints(pts as Phaser.Math.Vector2[], true);
       g.fillStyle(0xffe89a, 1).fillCircle(13, 11, 5);
       eyes(g, 10, 2.4, 1.3, 0x7a4a05);
       g.fillStyle(0x7a4a05, 1).fillEllipse(13, 13.5, 3.5, 2);
