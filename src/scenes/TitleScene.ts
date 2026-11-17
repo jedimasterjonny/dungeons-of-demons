@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BOSS, CRATES, CURRENCY, WORLD } from '../systems/config';
+import { WORLD } from '../systems/config';
 import { gameState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
@@ -27,8 +27,18 @@ export class TitleScene extends Phaser.Scene {
       blendMode: Phaser.BlendModes.ADD,
     });
 
+    // His front cover.
     this.add
-      .text(W / 2, H / 2 - 92, 'DUNGEONS', {
+      .text(W / 2, H / 2 - 113, 'Earn shards, get MASSIVE power and have fun hitting Thanos!', {
+        fontFamily: FONT,
+        fontSize: '17px',
+        fontStyle: 'bold',
+        color: '#c8a2ff',
+      })
+      .setOrigin(0.5);
+
+    this.add
+      .text(W / 2, H / 2 - 57, 'DUNGEONS', {
         fontFamily: FONT,
         fontSize: '58px',
         fontStyle: 'bold',
@@ -36,7 +46,7 @@ export class TitleScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     this.add
-      .text(W / 2, H / 2 - 42, 'of DEMONS', {
+      .text(W / 2, H / 2 - 7, 'of DEMONS', {
         fontFamily: FONT,
         fontSize: '34px',
         fontStyle: 'bold',
@@ -44,26 +54,9 @@ export class TitleScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    const rules = [
-      'Three demons slain forges one full key.',
-      'Keys open the vaults. Only a cleared floor opens the way out.',
-      `${CURRENCY.coinsPerGalaxyCoin.toLocaleString()} coins forge a single galaxy coin.`,
-      `${CRATES.startingCount} crates to a floor. Q drops one to hide behind.`,
-      `A ${BOSS.name} holds the portal on every ${BOSS.everyNFloors}th floor.`,
-    ];
-    rules.forEach((line, i) => {
-      this.add
-        .text(W / 2, H / 2 - 6 + i * 19, line, {
-          fontFamily: FONT,
-          fontSize: '13px',
-          color: '#9c96ad',
-        })
-        .setOrigin(0.5);
-    });
-
     const hasRun = gameState.deepestFloor > 1 || gameState.coins > 0;
     const start = this.add
-      .text(W / 2, H / 2 + 96, hasRun ? `CONTINUE — FLOOR ${gameState.floor}` : 'ENTER TO DESCEND', {
+      .text(W / 2, H / 2 + 59, hasRun ? `CONTINUE — FLOOR ${gameState.floor}` : 'ENTER TO DESCEND', {
         fontFamily: FONT,
         fontSize: '17px',
         fontStyle: 'bold',
@@ -73,7 +66,7 @@ export class TitleScene extends Phaser.Scene {
     this.tweens.add({ targets: start, alpha: { from: 1, to: 0.35 }, duration: 900, yoyo: true, repeat: -1 });
 
     this.add
-      .text(W / 2, H / 2 + 120, '2 — TWO PLAYERS  (player two joins on the arrow keys)', {
+      .text(W / 2, H / 2 + 85, '2 — TWO PLAYERS  (player two joins on the arrow keys)', {
         fontFamily: FONT,
         fontSize: '13px',
         fontStyle: 'bold',
@@ -85,7 +78,7 @@ export class TitleScene extends Phaser.Scene {
       this.add
         .text(
           W / 2,
-          H / 2 + 146,
+          H / 2 + 113,
           `Deepest floor ${gameState.deepestFloor} · ${gameState.coins.toLocaleString()} coins · ◈ ${gameState.galaxyCoins}`,
           { fontFamily: FONT, fontSize: '12px', color: '#7d7a8c' }
         )

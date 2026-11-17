@@ -3,7 +3,7 @@
  *
  * The game ships with no art assets — every sprite is drawn at boot — and the music
  * follows the same rule: there is no .mp3 anywhere, just oscillators and an envelope.
- * The whole tune is the twelve lines of data below.
+ * Both tunes are just the tables of notes below.
  */
 
 /** Equal temperament from A4 = 440, so notes can be written by name. */
@@ -58,15 +58,45 @@ const phrase = (pitches: string[]): Note[] =>
  * The second is the same shape moved up, ending on A instead, which does not settle,
  * which is what makes it want to come round to the beginning again.
  */
-export const THEME: Note[] = [
+export const DUM_THEME: Note[] = [
   ...phrase(['D3', 'D3', 'D3', 'A3', 'F3', 'E3', 'D3']),
   { name: null, beats: 2, say: '(breath)' },
   ...phrase(['F3', 'F3', 'F3', 'C4', 'A3', 'G3', 'A3']),
   { name: null, beats: 4, say: '(breath)' },
 ];
 
+/**
+ * "boy girl cat mouse cheese" — the second theme.
+ *
+ * A chase: each word is one step up the stairs, with "cat mouse" run together quickly
+ * because the cat is right behind the mouse, and "cheese" held at the top because that
+ * is what everyone was running for. The first time, cheese is C — up high and unsettled,
+ * still being chased. The second time they all run back down and cheese lands on D,
+ * home, which hands straight back to the first theme's opening D.
+ */
+const CHEESE: { say: string; beats: number }[] = [
+  { say: 'boy', beats: 2 },
+  { say: 'girl', beats: 2 },
+  { say: 'cat', beats: 1 },
+  { say: 'mouse', beats: 1 },
+  { say: 'cheese', beats: 4 },
+];
+
+const cheese = (pitches: string[]): Note[] =>
+  CHEESE.map((p, i) => ({ name: pitches[i], beats: p.beats, say: p.say }));
+
+export const CHEESE_THEME: Note[] = [
+  ...cheese(['D3', 'F3', 'G3', 'A3', 'C4']),
+  { name: null, beats: 2, say: '(breath)' },
+  ...cheese(['C4', 'A3', 'G3', 'F3', 'D3']),
+  { name: null, beats: 4, say: '(breath)' },
+];
+
+/** The two themes take turns: dum dumdum, then boy girl cat mouse cheese, then round. */
+export const THEME: Note[] = [...DUM_THEME, ...CHEESE_THEME];
+
 /** How long one time round the loop takes, in seconds. */
-export const themeLength = (): number => THEME.reduce((t, n) => t + n.beats * BEAT, 0) * 1;
+export const themeLength = (): number => THEME.reduce((t, n) => t + n.beats * BEAT, 0);
 
 /** Hertz for a note name. Unknown names fall silent rather than screech. */
 export const frequencyOf = (name: string): number => NOTES[name] ?? 0;

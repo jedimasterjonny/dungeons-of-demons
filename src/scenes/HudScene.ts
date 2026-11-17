@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BOSS, COOP, PLANET, SCREECH, WORLD } from '../systems/config';
+import { BOSS, COOP, PLANET, SCREECH, SHARDS, WORLD } from '../systems/config';
 import { isDarkFloor } from '../systems/dungeon';
 import { gameState, type PlayerState } from '../systems/state';
 
@@ -33,6 +33,7 @@ export class HudScene extends Phaser.Scene {
   private keyText!: Phaser.GameObjects.Text;
   private keyIcon!: Phaser.GameObjects.Image;
   private fragPips!: Phaser.GameObjects.Graphics;
+  private shardText!: Phaser.GameObjects.Text;
   private coinText!: Phaser.GameObjects.Text;
   private galaxyText!: Phaser.GameObjects.Text;
   private galaxyBar!: Phaser.GameObjects.Graphics;
@@ -66,6 +67,11 @@ export class HudScene extends Phaser.Scene {
       .text(keyX + 18, keyY, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#ffd15c' })
       .setOrigin(0, 0.5);
     this.fragPips = this.add.graphics();
+
+    // --- ????? Shards, tucked under the keys: the top row has no room left.
+    this.shardText = this.add
+      .text(keyX - 8, keyY + 24, '', { fontFamily: FONT, fontSize: '12px', fontStyle: 'bold', color: '#c8a2ff' })
+      .setOrigin(0, 0.5);
 
     // --- floor and demons remaining
     this.floorText = this.add
@@ -194,6 +200,14 @@ export class HudScene extends Phaser.Scene {
         .fillStyle(filled ? 0xffd15c : 0xffffff, filled ? 1 : 0.16)
         .fillCircle(this.keyText.x + 22 + i * 13, this.keyIcon.y, 4.5);
     }
+
+    // Shared by the party in practice (everyone gets each boss's shard), so player
+    // one's count speaks for both. Gold once the massive power is ready.
+    const shards = gameState.me.shards;
+    this.shardText
+      .setVisible(shards > 0)
+      .setText(shards < SHARDS.forMassive ? `◆ ${shards}/${SHARDS.forMassive}` : `◆ ${shards}  MASSIVE`)
+      .setColor(shards < SHARDS.forMassive ? '#c8a2ff' : '#ffd15c');
 
     // Marked on the title rather than given its own indicator: the second row is
     // already carrying the ears and the sword, and the black screen says it louder.

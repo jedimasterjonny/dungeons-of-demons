@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { Monster } from '../entities/Monster';
 import { Player } from '../entities/Player';
 import { isInSwingArc } from '../systems/combat';
-import { BOSS, COOP, CRATES, DARKNESS, PLANET, KEYS, PLAYER, SCREECH, TILE, WORLD } from '../systems/config';
+import { BOSS, COOP, CRATES, DARKNESS, PLANET, KEYS, PLAYER, SCREECH, SHARDS, TILE, WORLD } from '../systems/config';
 import {
   TileType,
   generateDungeon,
@@ -40,6 +40,8 @@ export class DungeonScene extends Phaser.Scene {
   private boss?: Monster;
   /** The Star Sword lying on the planet, until someone walks over it. */
   private sword?: Phaser.Physics.Arcade.Sprite;
+  /** This floor's ????? Shard, lying where its Demon Lord fell, until picked up. */
+  private shardPickup?: Phaser.Physics.Arcade.Sprite;
   private exitPortal!: Phaser.GameObjects.Sprite;
   private shopPad!: Phaser.GameObjects.Sprite;
   /** One per player who owns a pair — it rides along on their head. */
@@ -468,6 +470,15 @@ export class DungeonScene extends Phaser.Scene {
         this.physics.add.overlap(player, this.sword, () => this.takeSword(player));
       }
     }
+
+    // Landing on the planet with every shard: say so, because it changes the fight.
+    if (this.players.some((p) => p.sheet.hasMassivePower) && this.monsters.getChildren().some((m) => (m as Monster).stats.kind === 'thanos')) {
+      const p = this.players[0];
+      this.time.delayedCall(900, () => this.cameras.main.flash(400, 200, 120, 255));
+      this.time.delayedCall(1300, () =>
+        this.floatText(p.x, p.y - 40, `${SHARDS.forMassive} SHARDS: x${SHARDS.thanosMultiplier} AGAINST THANOS`, '#c8a2ff', 2400)
+      );
+    }
   }
 
   private bindInput(): void {
@@ -741,7 +752,7 @@ export class DungeonScene extends Phaser.Scene {
 
       const toMonster = Math.atan2(m.y - player.y, m.x - player.x);
       hitAny = true;
-      const killed = m.takeDamage(player.sheet.damage, toMonster);
+      const killed = m.takeDamage(player.sheet.damageAgainst(m.stats), toMonster);
       this.spark(m.x, m.y, 0xffffff, 6);
       if (killed) this.killMonster(m, player);
     }
@@ -774,6 +785,7 @@ export class DungeonScene extends Phaser.Scene {
       this.cameras.main.shake(500, 0.012);
       this.cameras.main.flash(500, 255, 90, 120);
       this.floatText(x, y - 34, `THE ${BOSS.name.toUpperCase()} FALLS`, '#ff3b5c');
+      if (gameState.shardOnThisFloor) this.dropShard(x, y);
     }
 
     // Every kill drops its coins plus a key fragment. Three fragments make a key.
@@ -788,6 +800,59 @@ export class DungeonScene extends Phaser.Scene {
       this.cameras.main.flash(300, 60, 200, 120);
     }
     this.emitStats();
+  }
+
+  /**
+   * The Demon Lord's ????? Shard falls where it died. It is not loot that flies to you
+   * like coins: you have to walk over and take it, and if you leave the floor
+   * without it, it is gone for good.
+   */
+  private dropShard(x: number, y: number): void {
+    this.shardPickup = this.physics.add.sprite(x, y, 'shard').setDepth(16);
+    this.tweens.add({ targets: this.shardPickup, scale: { from: 0, to: 1.2 }, duration: 260, ease: 'Back.easeOut' });
+    this.tweens.add({
+      targets: this.shardPickup,
+      y: y - 6,
+      duration: 800,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    for (const player of this.players) {
+      this.physics.add.overlap(player, this.shardPickup, () => this.takeShard(player));
+    }
+  }
+
+  private takeShard(player: Player): void {
+    if (!this.shardPickup?.active || player.isDowned) return;
+    const { x, y } = this.shardPickup;
+    this.shardPickup.destroy();
+    this.shardPickup = undefined;
+    if (gameState.earnShard()) this.celebrateShard(x, y);
+  }
+
+  /** The tenth shard is the massive power-up. */
+  private celebrateShard(x: number, y: number): void {
+    // Flash first, words after: words drawn under a flash are washed out unreadable.
+    // And held for longer than a coin pickup, because this is the big moment.
+    const n = gameState.me.shards;
+    const hold = 2400;
+    this.cameras.main.flash(400, 200, 120, 255);
+    this.spark(x, y, 0xc8a2ff, 30);
+    this.time.delayedCall(400, () => {
+      this.floatText(x, y - 34, `${SHARDS.name.toUpperCase()}  ${n > SHARDS.forMassive ? n : `${n}/${SHARDS.forMassive}`}`, '#c8a2ff', hold);
+      this.floatText(x, y - 10, `+${SHARDS.damagePerShard} DAMAGE`, '#ffd15c', hold);
+    });
+    if (n === SHARDS.forMassive) {
+      this.time.delayedCall(2800, () => {
+        this.cameras.main.flash(500, 255, 255, 255);
+        this.cameras.main.shake(400, 0.01);
+      });
+      this.time.delayedCall(3300, () => {
+        this.floatText(x, y - 34, 'ALL 10 SHARDS: MASSIVE POWER', '#ffffff', hold);
+        this.floatText(x, y - 10, `x${SHARDS.thanosMultiplier} AGAINST THANOS`, '#c8a2ff', hold);
+      });
+    }
   }
 
   /** Picks up the Star Sword: your swing becomes a flat 500 for the rest of the floor. */
@@ -1106,7 +1171,7 @@ export class DungeonScene extends Phaser.Scene {
     this.time.delayedCall(500, () => emitter.destroy());
   }
 
-  private floatText(x: number, y: number, message: string, color: string): void {
+  private floatText(x: number, y: number, message: string, color: string, duration = 900): void {
     const t = this.add
       .text(x, y, message, {
         fontFamily: 'system-ui, sans-serif',
@@ -1120,7 +1185,7 @@ export class DungeonScene extends Phaser.Scene {
       targets: t,
       y: y - 30,
       alpha: { from: 1, to: 0 },
-      duration: 900,
+      duration,
       ease: 'Cubic.easeOut',
       onComplete: () => t.destroy(),
     });

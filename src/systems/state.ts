@@ -1,5 +1,5 @@
 import { AVATARS, DEFAULT_AVATAR, avatarName, isAvatarId } from './avatars';
-import { CRATES, CURRENCY, KEYS, PLANET, PLAYER, SCREECH } from './config';
+import { CRATES, CURRENCY, KEYS, PLANET, PLAYER, SCREECH, SHARDS, type MonsterStats } from './config';
 
 export type UpgradeId =
   | 'vitality'
@@ -135,6 +135,10 @@ export interface SaveData {
   avatar: string;
   /** Whether the theme tune is switched off. Remembered between sessions. */
   musicOff: boolean;
+  /** ????? Shards earned. Missing from saves made before shards existed. */
+  shards?: number;
+  /** The last tenth floor whose shard was picked up, so a replay cannot pay twice. */
+  shardFloor?: number;
 }
 
 const SAVE_KEY = 'dungeons-of-demons/save/v1';
@@ -174,6 +178,8 @@ export class PlayerState {
   crates = 0;
   /** Holding the Star Sword. Planet-only: dropped the moment you leave that floor. */
   hasStarSword = false;
+  /** ????? Shards. One per Demon Lord beaten; progress, so saved. */
+  shards = 0;
   /**
    * Out of health and lying on the floor, waiting to be picked up. Only ever true
    * in co-op: a lone player has nobody to rescue them, so they simply die.
@@ -206,8 +212,19 @@ export class PlayerState {
   get damage(): number {
     const base = this.hasStarSword
       ? PLANET.swordDamage
-      : PLAYER.baseDamage + this.level('edge') * 5;
+      : PLAYER.baseDamage + this.level('edge') * 5 + this.shards * SHARDS.damagePerShard;
     return Math.round(base * this.screechDamageMultiplier);
+  }
+
+  /** All ten shards: the massive power-up. */
+  get hasMassivePower(): boolean {
+    return this.shards >= SHARDS.forMassive;
+  }
+
+  /** What a swing does to this particular demon. Only Thanos feels the massive power. */
+  damageAgainst(target: MonsterStats): number {
+    const boost = target.kind === 'thanos' && this.hasMassivePower ? SHARDS.thanosMultiplier : 1;
+    return this.damage * boost;
   }
 
   /** Earmuffs are all-or-nothing: one pair and screeches stop mattering. */
@@ -291,6 +308,11 @@ export class GameState {
   keys = 0;
   /** Theme tune off. A setting rather than progress, so a save wipe leaves it alone. */
   musicOff = false;
+  /**
+   * The last tenth floor whose ????? Shard was picked up. Floors only go up, so this
+   * one number answers "has this floor's shard been taken?" for every floor.
+   */
+  shardFloor = 0;
 
   /** One entry per person playing. Index 0 owns the save on this computer. */
   players: PlayerState[] = [new PlayerState(0)];
@@ -330,6 +352,7 @@ export class GameState {
       const joiner = new PlayerState(this.players.length);
       joiner.upgrades = { ...this.me.upgrades };
       joiner.avatar = this.me.avatar;
+      joiner.shards = this.me.shards;
       joiner.hp = joiner.maxHp;
       this.players.push(joiner);
     }
@@ -388,6 +411,26 @@ export class GameState {
     this.coins += Math.round(n * by.coinMultiplier);
   }
 
+  /**
+   * Whether this floor still has a ????? Shard to give: a tenth floor whose shard
+   * nobody has picked up yet. False once you leave — a shard left lying is gone.
+   */
+  get shardOnThisFloor(): boolean {
+    return this.floor % SHARDS.everyNFloors === 0 && this.floor > this.shardFloor;
+  }
+
+  /**
+   * Somebody picked up this floor's shard. Everyone gets it, once — dying after
+   * picking it up and killing the boss again on the replay does not pay twice.
+   */
+  earnShard(): boolean {
+    if (!this.shardOnThisFloor) return false;
+    this.shardFloor = this.floor;
+    for (const p of this.players) p.shards += 1;
+    this.save();
+    return true;
+  }
+
   /** Adds fragments, rolling every full set over into a whole key. */
   addFragments(n: number): { keysGained: number } {
     this.fragments += n;
@@ -407,6 +450,8 @@ export class GameState {
       upgrades: this.me.upgrades,
       avatar: this.me.avatar,
       musicOff: this.musicOff,
+      shards: this.me.shards,
+      shardFloor: this.shardFloor,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -446,6 +491,12 @@ export class GameState {
     // A look from an older save that no longer exists falls back to the delver.
     this.me.avatar = isAvatarId(data.avatar) ? data.avatar : DEFAULT_AVATAR;
     this.musicOff = data.musicOff === true;
+    // A save from before shards existed: you already beat every Demon Lord above the
+    // deepest floor you reached, so you are given those shards.
+    const beaten = Math.max(0, Math.floor((data.deepestFloor - 1) / SHARDS.everyNFloors));
+    const count = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+    this.me.shards = count(data.shards) ? Math.floor(data.shards) : beaten;
+    this.shardFloor = count(data.shardFloor) ? Math.floor(data.shardFloor) : beaten * SHARDS.everyNFloors;
   }
 
   reset(): void {
@@ -458,6 +509,7 @@ export class GameState {
     this.deepestFloor = fresh.deepestFloor;
     this.fragments = 0;
     this.keys = 0;
+    this.shardFloor = 0;
     // A wipe drops back to one player: co-op is chosen fresh from the title screen.
     this.players = [new PlayerState(0)];
     this.me.upgrades = {};
