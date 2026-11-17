@@ -1,11 +1,16 @@
 import Phaser from 'phaser';
 import { CURRENCY, WORLD } from '../systems/config';
-import { UPGRADES, gameState, type Upgrade } from '../systems/state';
+import { UPGRADES, gameState, type PlayerState, type Upgrade } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
-/** Row geometry, tuned so every upgrade plus the exchange line fits the panel. */
-const ROW_H = 30;
-const ROW_STEP = 34;
+/**
+ * Row geometry, tuned so every upgrade plus the exchange line fits the panel.
+ * With eleven upgrades there is no slack left: at the old 34px step the exchange
+ * line landed on top of the toast. Rows run 86..438, the exchange line 444..476,
+ * and the toast sits at 488. Adding a twelfth upgrade means shrinking these again.
+ */
+const ROW_H = 28;
+const ROW_STEP = 32;
 const ROW_TOP = 86;
 
 interface Row {
@@ -25,6 +30,8 @@ export class ShopScene extends Phaser.Scene {
   private rows: Row[] = [];
   private selected = 0;
   private returnTo = 'Dungeon';
+  /** Whose upgrades this shop is buying. The coins are the party's; the gear is theirs. */
+  private buyer!: PlayerState;
   private coinText!: Phaser.GameObjects.Text;
   private galaxyText!: Phaser.GameObjects.Text;
   private convertRow!: { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text };
@@ -36,8 +43,9 @@ export class ShopScene extends Phaser.Scene {
     super('Shop');
   }
 
-  init(data: { returnTo?: string }): void {
+  init(data: { returnTo?: string; buyerIndex?: number }): void {
     this.returnTo = data.returnTo ?? 'Dungeon';
+    this.buyer = gameState.players[data.buyerIndex ?? 0] ?? gameState.me;
     this.rows = [];
     this.selected = 0;
     this.ready = false;
@@ -168,17 +176,17 @@ export class ShopScene extends Phaser.Scene {
     }
 
     const row = this.rows[this.selected];
-    const level = gameState.level(row.upgrade.id);
+    const level = this.buyer.level(row.upgrade.id);
 
-    if (row.upgrade.id === 'avatar' && gameState.canChangeAvatar) {
+    if (row.upgrade.id === 'avatar' && this.buyer.canChangeAvatar) {
       this.openWardrobe();
     } else if (level >= row.upgrade.maxLevel) {
       this.flash(`${row.upgrade.name} is fully upgraded`, '#9c96ad');
-    } else if (gameState.buy(row.upgrade)) {
-      this.flash(`${row.upgrade.name} → level ${gameState.level(row.upgrade.id)}`, '#4ade80');
+    } else if (gameState.buy(row.upgrade, this.buyer)) {
+      this.flash(`${row.upgrade.name} → level ${this.buyer.level(row.upgrade.id)}`, '#4ade80');
       this.cameras.main.flash(140, 80, 200, 120);
     } else {
-      const cost = gameState.costOf(row.upgrade);
+      const cost = gameState.costOf(row.upgrade, this.buyer);
       this.flash(
         row.upgrade.tier === 'coin'
           ? `Need ${(cost - gameState.coins).toLocaleString()} more coins`
@@ -192,7 +200,7 @@ export class ShopScene extends Phaser.Scene {
   private openWardrobe(): void {
     if (this.scene.isActive('Avatar')) return;
     this.scene.pause();
-    this.scene.launch('Avatar', { returnTo: 'Shop' });
+    this.scene.launch('Avatar', { returnTo: 'Shop', wearerIndex: this.buyer.index });
   }
 
   private flash(message: string, color: string): void {
@@ -207,19 +215,19 @@ export class ShopScene extends Phaser.Scene {
 
     this.rows.forEach((row, i) => {
       const { upgrade } = row;
-      const level = gameState.level(upgrade.id);
+      const level = this.buyer.level(upgrade.id);
       const maxed = level >= upgrade.maxLevel;
       const active = i === this.selected;
-      const affordable = gameState.canAfford(upgrade);
+      const affordable = gameState.canAfford(upgrade, this.buyer);
 
-      const wardrobe = upgrade.id === 'avatar' && gameState.canChangeAvatar;
+      const wardrobe = upgrade.id === 'avatar' && this.buyer.canChangeAvatar;
 
       row.bg.setFillStyle(active ? 0x2f2743 : 0x1e1a2b, 1);
       row.bg.setStrokeStyle(active ? 2 : 1, active ? 0xffd15c : 0x342c47);
       row.name.setColor(maxed && !wardrobe ? '#7d7a8c' : '#ffffff');
       row.desc.setText(
         wardrobe
-          ? `Wearing ${gameState.avatarName} — ENTER to change`
+          ? `Wearing ${this.buyer.avatarName} — ENTER to change`
           : maxed
             ? 'Maxed out'
             : upgrade.describe(level)

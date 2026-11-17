@@ -72,11 +72,20 @@ export class TitleScene extends Phaser.Scene {
       .setOrigin(0.5);
     this.tweens.add({ targets: start, alpha: { from: 1, to: 0.35 }, duration: 900, yoyo: true, repeat: -1 });
 
+    this.add
+      .text(W / 2, H / 2 + 120, '2 — TWO PLAYERS  (player two joins on the arrow keys)', {
+        fontFamily: FONT,
+        fontSize: '13px',
+        fontStyle: 'bold',
+        color: '#8affc9',
+      })
+      .setOrigin(0.5);
+
     if (hasRun) {
       this.add
         .text(
           W / 2,
-          H / 2 + 122,
+          H / 2 + 146,
           `Deepest floor ${gameState.deepestFloor} · ${gameState.coins.toLocaleString()} coins · ◈ ${gameState.galaxyCoins}`,
           { fontFamily: FONT, fontSize: '12px', color: '#7d7a8c' }
         )
@@ -90,18 +99,29 @@ export class TitleScene extends Phaser.Scene {
         .setOrigin(0.5);
     }
 
+    this.add
+      .text(W - 14, H - 14, 'M — music on/off', { fontFamily: FONT, fontSize: '11px', color: '#5c5868' })
+      .setOrigin(1, 0.5);
+
     const kb = this.input.keyboard!;
-    kb.once('keydown-ENTER', () => this.begin());
-    kb.once('keydown-SPACE', () => this.begin());
+    kb.once('keydown-ENTER', () => this.begin(1));
+    kb.once('keydown-SPACE', () => this.begin(1));
+    kb.once('keydown-TWO', () => this.begin(2));
+    kb.once('keydown-NUMPAD_TWO', () => this.begin(2));
     kb.on('keydown-BACKSPACE', () => {
       gameState.reset();
       this.scene.restart();
     });
   }
 
-  private begin(): void {
+  private begin(playerCount: number): void {
     this.input.keyboard!.removeAllListeners();
-    gameState.hp = gameState.maxHp;
+    // Chosen fresh every run: nothing about how many people are playing is saved.
+    gameState.setPlayerCount(playerCount);
+    for (const p of gameState.players) {
+      p.refreshForFloor();
+      p.hp = p.maxHp;
+    }
     gameState.keys = 0;
     this.cameras.main.fadeOut(300, 0, 0, 0);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {

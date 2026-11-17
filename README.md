@@ -29,10 +29,15 @@ npm run dev        # http://localhost:5173
 
 ## Controls
 
-- **WASD** / **arrows** — move
-- **SPACE** — swing (hold to keep swinging; the cooldown paces it)
-- **Q** — drop a crate on the tile you are facing
-- **E** — shop, escape through the portal
+|                  | One player        | Player one | Player two |
+| ---------------- | ----------------- | ---------- | ---------- |
+| Move             | WASD or arrows    | WASD       | Arrows     |
+| Swing            | SPACE             | SPACE      | ENTER      |
+| Drop a crate     | Q                 | Q          | SHIFT      |
+| Shop / escape    | E                 | E          | E          |
+
+- **ENTER** on the title screen — one player. **2** — two players.
+- **M** — theme tune on/off, from anywhere in the game
 - **↑↓ / ENTER / ESC** — navigate the shop
 - **BACKSPACE** on the title screen — wipe the save
 
@@ -44,6 +49,9 @@ fragments you're carrying toward the next one.
 
 **You cannot escape until every demon on the floor is dead.** The exit portal is
 sealed red and stays that way until the last one falls, then turns green.
+
+**Every twentieth floor is dark.** You see only what your own light reaches, and only
+the ground you have already walked stays lit behind you. See [The dark floors](#the-dark-floors).
 
 **3,000 coins forge one galaxy coin.** Coins drop from kills and chests. Galaxy coins
 are the premium currency, spent on the three strongest upgrades.
@@ -144,6 +152,52 @@ refused drop costs you nothing — you keep the crate.
 The stack refills to full at the start of every floor, and dying and restarting a floor
 refills it too. Crates in hand are never saved; the size of the stack is.
 
+## The dark floors
+
+**Every twentieth floor the lights go out** — 20, 40, 60, 80, 100 and on down. The floor
+is pitch black. You carry a light eight tiles wide, and that is all you can see:
+demons, chests, doors and the portal are all invisible until your light falls on them.
+
+The ground you walk over stays lit behind you, dimmer than your torch but well clear of
+black. So a dark floor is *mapped by walking it* rather than read at a glance, and the
+map you build is yours — it does not carry to the next dark floor.
+
+Two things about them are worth knowing before you drop in.
+
+**Every dark floor is also a boss floor.** Twenty is a multiple of ten, so it always
+was — but in the dark a Demon Lord spots you from 460 pixels away while your light
+reaches 256, so it still sees you the best part of twice as early as you see it. Its
+health bar appearing on the HUD is the only warning you get. Earmuffs help here too,
+since bosses scream.
+
+**Nothing glows through the dark**, on purpose: the exit portal is as hidden as
+everything else, so clearing the floor and then *finding* the way out are two separate
+problems. `DARKNESS.lightRadius` in `config.ts` is the one number to raise if that turns
+out to be too mean — it started at five tiles and was widened to eight for exactly that
+reason.
+
+### How it is drawn
+
+Two sheets of black over the floor, both above the world and below the on-screen prompts
+so text stays readable.
+
+- **`seen`** is opaque and is only ever *erased*. Every step burns a near-solid hole in
+  it, and that hole never comes back — it is the map you build by walking.
+- **`near`** is thinner (66% black) and carries the hole that travels with you. It is
+  wiped and repainted every frame.
+
+Ground you have never reached shows both, so it is black. Ground you remember shows only
+`near`, so it is dim. Ground you are standing on shows neither.
+
+Only the box your light can reach is repainted each frame, unioned with the box it
+reached last frame so the hole punched then gets filled back in behind you. Repainting
+the whole 1920×1408 sheet instead measured about a third slower.
+
+The two glows are different shapes for a reason. The torch feathers away over most of
+its radius, which is what makes it read as a pool of light. The trail burnt into `seen`
+is almost solid, because erasing is subtractive: two soft sheets multiply, and a soft
+trail left even the ground under your feet looking half-lit.
+
 ## The screech
 
 Wraiths — the fast, weaving blue demons that start showing up on floor 3 — do not just
@@ -179,6 +233,116 @@ It is purely cosmetic and deliberately so: every avatar is drawn at the same 26�
 so your hitbox, reach and speed are identical whichever one you wear. Being a pizza is
 no harder than being a knight.
 
+## The theme tune
+
+> dum dumdum dummmm dom dom dam
+
+There is no `.mp3` anywhere. The game ships with no art assets — every sprite is drawn
+at boot — and the music keeps the same rule: the whole tune is a table of notes in
+`src/systems/music.ts`, played on oscillators through an envelope. **M** turns it off
+from anywhere, and it stays off between sessions.
+
+The line above is the rhythm, note for note: one, then two quick ones run together,
+then the long one, then three coming back down.
+
+| Syllable   | Eighth-notes | First half | Second half |
+| ---------- | ------------ | ---------- | ----------- |
+| dum        | 2            | D3         | F3          |
+| dum        | 1            | D3         | F3          |
+| dum        | 1            | D3         | F3          |
+| **dummmm** | **4**        | **A3**     | **C4**      |
+| dom        | 2            | F3         | A3          |
+| dom        | 2            | E3         | G3          |
+| dam        | 4            | D3         | A3          |
+
+The vowel changing from "u" to "o" to "a" is where the tune turns around, so the held
+**dummmm** is the top note and the descending "dom dom dam" walks back down. The theme
+plays the line twice: the first half lands back on D, settled, and the second lands on
+A, which does not settle — which is what makes it want to come round again. About eight
+and a half seconds to the loop.
+
+Each note is a triangle for the body, a quiet detuned square for the edge, and a sine an
+octave down on the longer notes for weight, through a lowpass at 1.4 kHz. That
+sub-octave started at half gain and was measurably louder than the note itself — a bass
+rumble rather than a tune — so it sits at 0.26 now.
+
+Notes are scheduled against the audio clock, not `setInterval`, because a timer that
+fires late makes the tune stumble. A timer only decides when to queue up more.
+
+`Music.render(loops)` plays the same synthesis into an `OfflineAudioContext` instead of
+the speakers. That is how the tune gets checked: rendering it and measuring the pitch of
+every note by autocorrelation proves the synthesiser produces the melody in the table
+above, which no amount of asserting on the data can.
+
+Browsers keep audio suspended until a page has had a real key or click, so the first
+input is what actually starts it — the game is deliberately silent until then.
+
+## Two players
+
+Press **2** on the title screen and a second player joins on the arrow keys, on the
+same keyboard. A coloured ring under each player's feet says who is who — gold for
+player one, green for player two — because both of you can be wearing the same avatar.
+
+The camera cannot follow two people, so it follows the midpoint between you and pulls
+back to hold you both, down to `COOP.minZoom`. Past that it stops shrinking the game
+and simply lets you separate.
+
+### Going down, and being picked up
+
+Running out of health in co-op does not kill you. You go **down**: flat on the floor,
+out of the fight, with a bar over your body. The other player stands over you for
+**three uninterrupted seconds** and you are back up with **half your health**. Step away
+and the progress resets to zero.
+
+Two things make it a real decision rather than a formality:
+
+- **Demons stop targeting a downed player and turn on the rescuer.** Whoever comes for
+  you takes everything that was hitting you, standing still, for three seconds.
+- **If both of you go down, the run is over** and you restart the floor together.
+
+Leaving a floor picks up anybody still down, so a rescue that never came cannot strand
+the party on the stairs.
+
+Alone, none of this applies: with nobody coming for you, running out of health is simply
+death, exactly as it always was.
+
+### What the party shares
+
+| Shared                 | Your own                                  |
+| ---------------------- | ----------------------------------------- |
+| Coins and galaxy coins | Health, and max health                    |
+| Keys and fragments     | Every upgrade, bought separately          |
+| Which floor you are on | Crates in hand                            |
+|                        | Earmuffs — one pair covers one head       |
+|                        | Your avatar                               |
+|                        | The Star Sword, carried by whoever got it |
+
+The shop charges the party's pot but upgrades **whoever walked onto the pad**, so the
+two of you build different characters out of one pile of coins. A screech is worked out
+against each player's own ears and each player's own distance from the demon.
+
+Player two starts with a **copy** of player one's upgrades. There is only one save on
+this computer for them to inherit from, and a level-one partner standing next to a maxed
+player would be a liability rather than a help. From that moment the two sets are
+independent — buying for one never upgrades the other. Only player one is written to
+disk; player two is a guest for the length of the run.
+
+### How it is put together
+
+`PlayerState` owns everything that belongs to one person; `GameState` owns the run and
+holds a list of them. That split is the whole feature — `Player` sprites read their own
+sheet and never reach for a global, so a second player is a second entry in an array
+rather than a special case threaded through the scene.
+
+It is also deliberately the shape networked play needs, where each player arrives from a
+different computer carrying their own upgrades. Floors are already generated from a
+deterministic seed (`generateDungeon(20)` builds the identical dungeon everywhere), so
+two machines would never have to send the map to each other — only the moving things.
+
+One naming trap worth knowing: the field on `Player` is called `sheet`, as in character
+sheet, not `state`. Phaser's `GameObject` already owns a `state` property, and shadowing
+it silently breaks every physics signature that takes a sprite.
+
 ## The shop
 
 Found on the green pad in the room you start each floor in.
@@ -188,13 +352,32 @@ Found on the green pad in the room you start each floor in.
 | Vitality         | Coins    | +15 max HP per level                         |
 | Edge             | Coins    | +5 damage per level                          |
 | Swiftness        | Coins    | +8% movement speed per level                 |
-| Frenzy           | Coins    | −7% swing cooldown per level                 |
+| LESS             | Coins    | −7% swing cooldown per level                 |
+| Armour           | Coins    | Every hit hurts 8% less per level, five deep |
 | Crate            | Coins    | Carry one more crate per floor (4,000 each)  |
 | Cute Fluffy Earmuffs | Coins | Demon screeches cannot weaken you (6,000)   |
 | Avatar           | Coins    | Be anything — unlocks the wardrobe (9,000)   |
-| Greed            | Galaxy   | +25% coins from every kill                   |
-| Soul Harvest     | Galaxy   | Kills drop extra key fragments               |
+| MORE!            | Galaxy   | +25% coins from every kill                   |
+| TAKE THAT!       | Galaxy   | Kills drop extra key fragments               |
 | Revenant         | Galaxy   | Survive one lethal hit per floor at 30% HP   |
+
+**LESS**, **MORE!** and **TAKE THAT!** were named by the designer. Only the display
+names changed: the ids behind them are still `frenzy`, `greed` and `harvest`, because an
+id is the key an upgrade is saved under and renaming one would quietly wipe everybody's
+levels for it on the next load.
+
+### Armour
+
+Five levels, 8% off every hit each, so a fully armoured player takes **60%** of what
+lands. That is the only defensive stat that scales with what is hitting you: Vitality
+gives a bigger pool, Revenant gives one free death, and armour makes the numbers
+themselves smaller. A Demon Lord's flat 44 becomes 26, and Thanos's 70 becomes 42.
+
+It is applied in one place — `Player.takeDamage` — so every source of damage in the game
+goes through it exactly once. `damageMultiplier` is also floored at 0.2 no matter what
+the level is, so raising `maxLevel` later can never reach immunity or, worse, go negative
+and make demons heal you. There is a test for that.
+
 
 The last row of the shop exchanges 3,000 coins for a galaxy coin.
 
@@ -242,6 +425,7 @@ player damage and speed, how fast floors scale, `KEYS.fragmentsPerKey`, and
 
 ## Ideas from here
 
+- The netcode: a server so the second player can be on another computer
 - Ranged demons, so positioning matters more than closing distance
 - More noises to defend against — a demon whose howl slows you instead
 - Crates you can shove rather than only drop
@@ -249,5 +433,5 @@ player damage and speed, how fast floors scale, `KEYS.fragmentsPerKey`, and
 - A different boss every tenth floor rather than the same Demon Lord
 - More planets past the first one
 - A second weapon or a dash bound to shift
-- Sound — there is none yet
-- Fog of war, so a floor has to be explored rather than read at a glance
+- More sound — a hit, a coin, a door, a boss roar
+- A lantern in the shop, so your light on a dark floor can be bought wider

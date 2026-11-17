@@ -6,6 +6,7 @@ export type UpgradeId =
   | 'edge'
   | 'swiftness'
   | 'frenzy'
+  | 'armour'
   | 'crates'
   | 'earmuffs'
   | 'avatar'
@@ -25,6 +26,12 @@ export interface Upgrade {
   /** Shown in the shop, describing what buying the next level gets you. */
   describe: (level: number) => string;
 }
+
+/**
+ * Damage taken off per level of Armour. maxLevel keeps the total at 40%, and
+ * damageMultiplier floors it regardless, so no amount of it can make you immune.
+ */
+const ARMOUR_PER_LEVEL = 0.08;
 
 export const UPGRADES: Upgrade[] = [
   {
@@ -53,11 +60,20 @@ export const UPGRADES: Upgrade[] = [
   },
   {
     id: 'frenzy',
-    name: 'Frenzy',
+    name: 'LESS',
     tier: 'coin',
     maxLevel: 6,
     cost: (l) => 260 + l * 210,
     describe: () => '-7% swing cooldown',
+  },
+  {
+    id: 'armour',
+    name: 'Armour',
+    tier: 'coin',
+    maxLevel: 5,
+    cost: (l) => 280 + l * 240,
+    describe: (l) =>
+      `Every hit hurts ${ARMOUR_PER_LEVEL * 100}% less  (${Math.round(l * ARMOUR_PER_LEVEL * 100)}% -> ${Math.round((l + 1) * ARMOUR_PER_LEVEL * 100)}% off)`,
   },
   {
     id: 'crates',
@@ -86,7 +102,7 @@ export const UPGRADES: Upgrade[] = [
   },
   {
     id: 'greed',
-    name: 'Greed',
+    name: 'MORE!',
     tier: 'galaxy',
     maxLevel: 3,
     cost: (l) => 1 + l,
@@ -94,7 +110,7 @@ export const UPGRADES: Upgrade[] = [
   },
   {
     id: 'harvest',
-    name: 'Soul Harvest',
+    name: 'TAKE THAT!',
     tier: 'galaxy',
     maxLevel: 2,
     cost: (l) => 2 + l * 2,
@@ -117,6 +133,8 @@ export interface SaveData {
   deepestFloor: number;
   upgrades: Partial<Record<UpgradeId, number>>;
   avatar: string;
+  /** Whether the theme tune is switched off. Remembered between sessions. */
+  musicOff: boolean;
 }
 
 const SAVE_KEY = 'dungeons-of-demons/save/v1';
@@ -124,28 +142,31 @@ const SAVE_KEY = 'dungeons-of-demons/save/v1';
 const LEGACY_SAVE_KEYS = ['dungeons-and-demons/save/v1'];
 
 function emptySave(): SaveData {
-  return { coins: 0, galaxyCoins: 0, floor: 1, deepestFloor: 1, upgrades: {}, avatar: DEFAULT_AVATAR };
+  return {
+    coins: 0,
+    galaxyCoins: 0,
+    floor: 1,
+    deepestFloor: 1,
+    upgrades: {},
+    avatar: DEFAULT_AVATAR,
+    musicOff: false,
+  };
 }
 
 /**
- * Everything that survives between floors. Run-scoped things (current HP, keys
- * held, monsters left alive) live on the dungeon scene, not here.
+ * Everything that belongs to one person: their health, their gear, their look.
+ *
+ * Split out of GameState because co-op needs two of them, and shaped for where this
+ * is going: in a networked game each player arrives from a different computer
+ * carrying their own upgrades, so nothing on this class is shared by design. What
+ * the party shares — coins, keys, which floor you are on — lives on GameState.
  */
-export class GameState {
-  coins = 0;
-  galaxyCoins = 0;
-  floor = 1;
-  deepestFloor = 1;
+export class PlayerState {
+  /** Carried between floors so the shop can heal you and the HUD stays honest. */
+  hp = PLAYER.baseMaxHp;
   upgrades: Partial<Record<UpgradeId, number>> = {};
   /** What you look like. Cosmetic only — every avatar has the same hitbox. */
   avatar = DEFAULT_AVATAR;
-
-  /** Carried between floors so the shop can heal you and the HUD stays honest. */
-  hp = PLAYER.baseMaxHp;
-  /** Fragments left over after the last whole key was assembled. */
-  fragments = 0;
-  /** Whole keys in hand. Run-scoped: spent on locked doors, never saved. */
-  keys = 0;
   revenantUsed = false;
   /** Seconds left on a demon's screech. Run-scoped, and never saved. */
   screechTimer = 0;
@@ -153,11 +174,16 @@ export class GameState {
   crates = 0;
   /** Holding the Star Sword. Planet-only: dropped the moment you leave that floor. */
   hasStarSword = false;
+  /**
+   * Out of health and lying on the floor, waiting to be picked up. Only ever true
+   * in co-op: a lone player has nobody to rescue them, so they simply die.
+   */
+  downed = false;
+  /** Seconds of rescuing done so far. Resets the moment nobody is standing over you. */
+  rescueProgress = 0;
 
-  constructor() {
-    this.load();
-    this.hp = this.maxHp;
-  }
+  /** 0 is the player this computer belongs to; 1 is whoever joined them. */
+  constructor(readonly index: number) {}
 
   level(id: UpgradeId): number {
     return this.upgrades[id] ?? 0;
@@ -165,6 +191,11 @@ export class GameState {
 
   get maxHp(): number {
     return PLAYER.baseMaxHp + this.level('vitality') * 15;
+  }
+
+  /** Down or dead, either way you are not fighting. */
+  get isPlaying(): boolean {
+    return !this.downed && this.hp > 0;
   }
 
   /**
@@ -190,6 +221,14 @@ export class GameState {
 
   get screechDamageMultiplier(): number {
     return this.isScreeched ? 1 - SCREECH.attackReduction : 1;
+  }
+
+  /**
+   * What is left of a hit after armour. Clamped at 0.2 so that raising Armour's
+   * maxLevel later can never reach zero — or go negative and heal you.
+   */
+  get damageMultiplier(): number {
+    return Math.max(0.2, 1 - this.level('armour') * ARMOUR_PER_LEVEL);
   }
 
   get speed(): number {
@@ -222,16 +261,78 @@ export class GameState {
     return avatarName(this.avatar);
   }
 
-  /** Refuses unknown looks, and refuses everything until the wardrobe is bought. */
-  setAvatar(id: string): boolean {
-    if (!this.canChangeAvatar || !isAvatarId(id)) return false;
-    this.avatar = id;
-    this.save();
-    return true;
-  }
-
   get hasRevenant(): boolean {
     return this.level('revenant') > 0;
+  }
+
+  /** Everything a new floor resets, whoever you are. */
+  refreshForFloor(): void {
+    this.revenantUsed = false;
+    this.screechTimer = 0;
+    this.crates = this.cratesPerFloor;
+    this.hasStarSword = false;
+    this.downed = false;
+    this.rescueProgress = 0;
+  }
+}
+
+/**
+ * Everything that survives between floors, plus who is playing. Run-scoped things
+ * (monsters left alive, where the doors are) live on the dungeon scene, not here.
+ */
+export class GameState {
+  coins = 0;
+  galaxyCoins = 0;
+  floor = 1;
+  deepestFloor = 1;
+  /** Fragments left over after the last whole key was assembled. Shared by the party. */
+  fragments = 0;
+  /** Whole keys in hand. Run-scoped: spent on locked doors, never saved. */
+  keys = 0;
+  /** Theme tune off. A setting rather than progress, so a save wipe leaves it alone. */
+  musicOff = false;
+
+  /** One entry per person playing. Index 0 owns the save on this computer. */
+  players: PlayerState[] = [new PlayerState(0)];
+
+  constructor() {
+    this.load();
+    this.me.hp = this.me.maxHp;
+  }
+
+  /** The player this computer belongs to — the one whose save is on disk. */
+  get me(): PlayerState {
+    return this.players[0];
+  }
+
+  get isCoop(): boolean {
+    return this.players.length > 1;
+  }
+
+  /** Everyone still on their feet. Empty means the run is over. */
+  get living(): PlayerState[] {
+    return this.players.filter((p) => p.isPlaying);
+  }
+
+  /**
+   * Sets how many people are playing.
+   *
+   * Player two inherits a copy of player one's upgrades. There is only one save on
+   * this computer, so there is nothing else for them to inherit — and a second
+   * player who swung for 20 while you swung for 70 would be a liability rather than
+   * a help. Once the game is networked each player brings their own save instead,
+   * which is why upgrades live on PlayerState and not here.
+   */
+  setPlayerCount(n: number): void {
+    const count = Math.max(1, Math.min(2, Math.floor(n)));
+    while (this.players.length > count) this.players.pop();
+    while (this.players.length < count) {
+      const joiner = new PlayerState(this.players.length);
+      joiner.upgrades = { ...this.me.upgrades };
+      joiner.avatar = this.me.avatar;
+      joiner.hp = joiner.maxHp;
+      this.players.push(joiner);
+    }
   }
 
   /** Coins needed for the next galaxy coin, and how far along you are. */
@@ -252,29 +353,39 @@ export class GameState {
     return true;
   }
 
-  costOf(u: Upgrade): number {
-    return u.cost(this.level(u.id));
+  costOf(u: Upgrade, who: PlayerState = this.me): number {
+    return u.cost(who.level(u.id));
   }
 
-  canAfford(u: Upgrade): boolean {
-    if (this.level(u.id) >= u.maxLevel) return false;
-    const cost = this.costOf(u);
+  canAfford(u: Upgrade, who: PlayerState = this.me): boolean {
+    if (who.level(u.id) >= u.maxLevel) return false;
+    const cost = this.costOf(u, who);
     return u.tier === 'coin' ? this.coins >= cost : this.galaxyCoins >= cost;
   }
 
-  buy(u: Upgrade): boolean {
-    if (!this.canAfford(u)) return false;
-    const cost = this.costOf(u);
+  /** The party pays; the player standing at the pad is the one who gets the upgrade. */
+  buy(u: Upgrade, who: PlayerState = this.me): boolean {
+    if (!this.canAfford(u, who)) return false;
+    const cost = this.costOf(u, who);
     if (u.tier === 'coin') this.coins -= cost;
     else this.galaxyCoins -= cost;
-    this.upgrades[u.id] = this.level(u.id) + 1;
-    if (u.id === 'vitality') this.hp = this.maxHp;
+    who.upgrades[u.id] = who.level(u.id) + 1;
+    if (u.id === 'vitality') who.hp = who.maxHp;
     this.save();
     return true;
   }
 
-  addCoins(n: number): void {
-    this.coins += Math.round(n * this.coinMultiplier);
+  /** Refuses unknown looks, and refuses everything until the wardrobe is bought. */
+  setAvatar(id: string, who: PlayerState = this.me): boolean {
+    if (!who.canChangeAvatar || !isAvatarId(id)) return false;
+    who.avatar = id;
+    this.save();
+    return true;
+  }
+
+  /** Loot is shared, but it is the killer's own MORE! that decides how much drops. */
+  addCoins(n: number, by: PlayerState = this.me): void {
+    this.coins += Math.round(n * by.coinMultiplier);
   }
 
   /** Adds fragments, rolling every full set over into a whole key. */
@@ -286,13 +397,16 @@ export class GameState {
   }
 
   save(): void {
+    // Only player one is written down: this is their computer and their save. A
+    // second player on the same keyboard is a guest for the length of the run.
     const data: SaveData = {
       coins: this.coins,
       galaxyCoins: this.galaxyCoins,
       floor: this.floor,
       deepestFloor: this.deepestFloor,
-      upgrades: this.upgrades,
-      avatar: this.avatar,
+      upgrades: this.me.upgrades,
+      avatar: this.me.avatar,
+      musicOff: this.musicOff,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -328,26 +442,28 @@ export class GameState {
     this.galaxyCoins = data.galaxyCoins;
     this.floor = data.floor;
     this.deepestFloor = data.deepestFloor;
-    this.upgrades = data.upgrades ?? {};
+    this.me.upgrades = data.upgrades ?? {};
     // A look from an older save that no longer exists falls back to the delver.
-    this.avatar = isAvatarId(data.avatar) ? data.avatar : DEFAULT_AVATAR;
+    this.me.avatar = isAvatarId(data.avatar) ? data.avatar : DEFAULT_AVATAR;
+    this.musicOff = data.musicOff === true;
   }
 
   reset(): void {
     const fresh = emptySave();
+    // Deliberately not reset: whether you want the tune on is a preference, not
+    // progress, and wiping a save to start again should not start it blaring.
     this.coins = fresh.coins;
     this.galaxyCoins = fresh.galaxyCoins;
     this.floor = fresh.floor;
     this.deepestFloor = fresh.deepestFloor;
-    this.upgrades = {};
-    this.avatar = DEFAULT_AVATAR;
     this.fragments = 0;
     this.keys = 0;
-    this.revenantUsed = false;
-    this.screechTimer = 0;
-    this.crates = 0;
-    this.hasStarSword = false;
-    this.hp = this.maxHp;
+    // A wipe drops back to one player: co-op is chosen fresh from the title screen.
+    this.players = [new PlayerState(0)];
+    this.me.upgrades = {};
+    this.me.avatar = DEFAULT_AVATAR;
+    this.me.refreshForFloor();
+    this.me.hp = this.me.maxHp;
     this.save();
   }
 }

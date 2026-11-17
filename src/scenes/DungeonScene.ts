@@ -2,17 +2,18 @@ import Phaser from 'phaser';
 import { Monster } from '../entities/Monster';
 import { Player } from '../entities/Player';
 import { isInSwingArc } from '../systems/combat';
-import { BOSS, CRATES, PLANET, KEYS, PLAYER, SCREECH, TILE, WORLD } from '../systems/config';
+import { BOSS, COOP, CRATES, DARKNESS, PLANET, KEYS, PLAYER, SCREECH, TILE, WORLD } from '../systems/config';
 import {
   TileType,
   generateDungeon,
   isCrateTile,
+  isDarkFloor,
   isPlanetFloor,
   tileToWorld,
   worldToTile,
   type DungeonData,
 } from '../systems/dungeon';
-import { gameState } from '../systems/state';
+import { gameState, type PlayerState } from '../systems/state';
 import { hasStoryAfter } from '../systems/stories';
 
 interface DoorSprite extends Phaser.Physics.Arcade.Sprite {
@@ -27,7 +28,8 @@ interface CrateSprite extends Phaser.Physics.Arcade.Sprite {
 
 export class DungeonScene extends Phaser.Scene {
   private dungeon!: DungeonData;
-  player!: Player;
+  /** One per person playing. Index 0 is player one; the array is the whole party. */
+  players: Player[] = [];
   private monsters!: Phaser.Physics.Arcade.Group;
   private walls!: Phaser.Physics.Arcade.StaticGroup;
   private doors!: Phaser.Physics.Arcade.StaticGroup;
@@ -40,8 +42,35 @@ export class DungeonScene extends Phaser.Scene {
   private sword?: Phaser.Physics.Arcade.Sprite;
   private exitPortal!: Phaser.GameObjects.Sprite;
   private shopPad!: Phaser.GameObjects.Sprite;
-  /** Only exists once you own a pair — it rides along on the player's head. */
-  private playerMuffs?: Phaser.GameObjects.Sprite;
+  /** One per player who owns a pair — it rides along on their head. */
+  private playerMuffs = new Map<Player, Phaser.GameObjects.Sprite>();
+  /** The coloured ring under each player's feet. Co-op only. */
+  private footRings = new Map<Player, Phaser.GameObjects.Image>();
+  /**
+   * What the camera actually follows. With two players it sits at their midpoint,
+   * because a camera cannot follow two things at once.
+   */
+  private camAnchor!: Phaser.GameObjects.Zone;
+
+  /** Set on dark floors only. Undefined everywhere else, which is what turns it off. */
+  private dark?: {
+    /** Full black. Only ever erased, so the trail you walk stays open for good. */
+    seen: Phaser.GameObjects.RenderTexture;
+    /** Thinner black, refilled every frame, with the hole that follows you. */
+    near: Phaser.GameObjects.RenderTexture;
+    /**
+     * The same surface as `near`, typed as what it actually is. The RenderTexture
+     * wrapper only exposes a whole-sheet clear(); clearing a sub-rectangle is what
+     * keeps the per-frame repaint cheap, and only DynamicTexture offers it.
+     */
+    nearTex: Phaser.Textures.DynamicTexture;
+    /** Off the display list: it exists only to be erased with. */
+    brush: Phaser.GameObjects.Image;
+    /** Where the trail was last stamped, so standing still stops eating the edge. */
+    lastStamp: Phaser.Math.Vector2[];
+    /** Per player, the box their hole was punched in last frame, to fill back in. */
+    lit: Phaser.Geom.Rectangle[];
+  };
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private keyW!: Phaser.Input.Keyboard.Key;
@@ -49,13 +78,19 @@ export class DungeonScene extends Phaser.Scene {
   private keyS!: Phaser.Input.Keyboard.Key;
   private keyD!: Phaser.Input.Keyboard.Key;
   private keySpace!: Phaser.Input.Keyboard.Key;
+  /** Player two: arrows to move, ENTER to swing, SHIFT to drop a crate. */
+  private keyEnter!: Phaser.Input.Keyboard.Key;
 
   private prompt!: Phaser.GameObjects.Text;
+  /** The rescue bar drawn over a fallen player. Redrawn from scratch every frame. */
+  private rescueUi!: Phaser.GameObjects.Graphics;
   private monstersLeft = 0;
   private transitioning = false;
   /** Recomputed each frame; the E handler acts on whatever is currently in reach. */
   private nearShop = false;
   private nearExit = false;
+  /** Whichever player is standing on the thing E would act on. */
+  private interactor?: Player;
 
   constructor() {
     super('Dungeon');
@@ -63,13 +98,15 @@ export class DungeonScene extends Phaser.Scene {
 
   create(): void {
     this.transitioning = false;
-    gameState.revenantUsed = false;
-    // A new floor starts with clear ears and a full stack of crates, whatever the
-    // last one did to you.
-    gameState.screechTimer = 0;
-    gameState.crates = gameState.cratesPerFloor;
-    // The Star Sword belongs to the planet and is picked up there, never carried in.
-    gameState.hasStarSword = false;
+    // A new floor starts with clear ears, a full stack of crates and everybody back
+    // on their feet, whatever the last one did to you. The Star Sword belongs to the
+    // planet and is picked up there, never carried in.
+    for (const p of gameState.players) p.refreshForFloor();
+    this.playerMuffs.clear();
+    this.footRings.clear();
+    // The scene object is reused floor to floor, so last floor's darkness would
+    // otherwise linger as a handle to render textures this floor has already destroyed.
+    this.dark = undefined;
     this.dungeon = generateDungeon(gameState.floor);
 
     const worldW = WORLD.cols * TILE;
@@ -81,6 +118,8 @@ export class DungeonScene extends Phaser.Scene {
     this.buildTiles(worldW, worldH);
     this.spawnEntities();
     this.bindInput();
+    // After spawnEntities: the first stamp needs the player to already exist.
+    if (isDarkFloor(gameState.floor)) this.buildDarkness(worldW, worldH);
 
     this.prompt = this.add
       .text(0, 0, '', {
@@ -94,7 +133,15 @@ export class DungeonScene extends Phaser.Scene {
       .setDepth(200)
       .setVisible(false);
 
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    // Above the world and the darkness, below the prompt.
+    this.rescueUi = this.add.graphics().setDepth(199);
+
+    // An invisible point rather than a player: in co-op it tracks the midpoint of
+    // the party, and following it keeps the existing smoothing for free.
+    this.camAnchor = this.add.zone(this.players[0].x, this.players[0].y, 1, 1);
+    this.cameras.main.startFollow(this.camAnchor, true, 0.12, 0.12);
+    this.cameras.main.setZoom(1);
+    this.trackCamera(1);
     this.cameras.main.fadeIn(350, 0, 0, 0);
 
     this.scene.launch('Hud');
@@ -104,24 +151,32 @@ export class DungeonScene extends Phaser.Scene {
     // You may have changed your look in the shop's wardrobe while we were paused.
     this.events.on(Phaser.Scenes.Events.RESUME, this.onResume, this);
 
-    this.events.on('revenant', () => {
+    this.events.on('revenant', (who: Player) => {
       this.cameras.main.flash(400, 255, 210, 90);
-      this.floatText(this.player.x, this.player.y - 30, 'REVENANT!', '#ffd15c');
+      this.floatText(who.x, who.y - 30, 'REVENANT!', '#ffd15c');
+    });
+
+    this.events.on('downed', (who: Player) => {
+      this.cameras.main.shake(280, 0.01);
+      this.floatText(who.x, who.y - 30, 'DOWN! — stand over them to help', '#ff8a8a');
     });
 
     // The HUD is a separate scene; make sure it dies with this one.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scene.stop('Hud');
       this.events.off('revenant');
+      this.events.off('downed');
       this.events.off('screech', this.onScreech, this);
       this.events.off(Phaser.Scenes.Events.RESUME, this.onResume, this);
       this.input.keyboard?.off('keydown-E', this.onInteract, this);
-      this.input.keyboard?.off('keydown-Q', this.onDropCrate, this);
+      this.input.keyboard?.off('keydown-Q', this.onDropCrateOne, this);
+      this.input.keyboard?.off('keydown-SHIFT', this.onDropCrateTwo, this);
     });
   }
 
   private onResume(): void {
-    this.player.refreshAvatar();
+    // You may have changed your look in the wardrobe while we were paused.
+    for (const p of this.players) p.refreshAvatar();
   }
 
   // --- world construction -------------------------------------------------
@@ -220,13 +275,121 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Two sheets of black over the whole floor.
+   *
+   * `seen` is opaque and is only ever erased, so every step burns a permanent hole
+   * in it — that is the map you build by walking. `near` is thinner, wiped and
+   * refilled every frame, and carries the hole that travels with you. Ground you
+   * have never reached shows both (black), ground you remember shows only `near`
+   * (dim), and ground you are standing on shows neither.
+   *
+   * Both sit above the world and below the prompt at depth 200, so text stays
+   * readable in the dark.
+   */
+  private buildDarkness(worldW: number, worldH: number): void {
+    const seen = this.add.renderTexture(0, 0, worldW, worldH).setOrigin(0).setDepth(100);
+    seen.fill(0x000000, 1);
+
+    const near = this.add.renderTexture(0, 0, worldW, worldH).setOrigin(0).setDepth(101);
+
+    // make(), not add(): a brush that rendered normally would be a white blob
+    // following the player around.
+    const brush = this.make.image({ key: 'light' }, false).setOrigin(0.5);
+
+    this.dark = {
+      seen,
+      near,
+      nearTex: near.texture as Phaser.Textures.DynamicTexture,
+      brush,
+      lastStamp: this.players.map(() => new Phaser.Math.Vector2(Infinity, Infinity)),
+      lit: this.players.map((p) => new Phaser.Geom.Rectangle(p.x, p.y, 0, 0)),
+    };
+    this.paintDarkness();
+  }
+
+  /** Points the shared brush at one glow profile and erases it out of one sheet. */
+  private eraseLight(
+    target: Phaser.GameObjects.RenderTexture,
+    key: 'light' | 'lighttrail',
+    radius: number,
+    x: number,
+    y: number
+  ): void {
+    const brush = this.dark!.brush;
+    const size = this.textures.get(key).getSourceImage().width;
+    brush.setTexture(key).setPosition(x, y).setScale((radius * 2) / size);
+    target.erase(brush);
+  }
+
+  private paintDarkness(): void {
+    if (!this.dark) return;
+    const { seen, near, nearTex, lastStamp, lit } = this.dark;
+    const r = DARKNESS.lightRadius;
+
+    this.players.forEach((player, i) => {
+      // Erasing is subtractive, so re-stamping the same spot every frame would keep
+      // eating into the soft rim until the trail was as wide as the whole brush.
+      // Only stamping once you have actually moved keeps the trail a fixed width.
+      const last = lastStamp[i];
+      if (Phaser.Math.Distance.Between(last.x, last.y, player.x, player.y) >= DARKNESS.stampDistance) {
+        this.eraseLight(seen, 'lighttrail', DARKNESS.memoryRadius, player.x, player.y);
+        last.set(player.x, player.y);
+      }
+    });
+
+    // Only the box a light can reach is repainted, unioned with the box it reached
+    // last frame so the hole punched then gets filled back in behind it. Redoing the
+    // whole 1920x1408 sheet every frame instead costs about two thirds of the frame
+    // rate. Two players get a box each rather than one box around both: apart, a
+    // single box spanning them would cover most of the floor and cost the same.
+    //
+    // Every fill happens before any erase, because one player's fill box can overlap
+    // the other's light and would otherwise paint their hole black again.
+    const boxes = this.players.map((player, i) => {
+      const was = lit[i];
+      const box = new Phaser.Geom.Rectangle();
+      box.x = Math.max(0, Math.min(player.x - r, was.x));
+      box.y = Math.max(0, Math.min(player.y - r, was.y));
+      box.width = Math.min(near.width, Math.max(player.x + r, was.right)) - box.x;
+      box.height = Math.min(near.height, Math.max(player.y + r, was.bottom)) - box.y;
+      was.setTo(player.x - r, player.y - r, r * 2, r * 2);
+      return box;
+    });
+
+    for (const box of boxes) {
+      // clear() first: fill() blends, so filling a region twice would darken it.
+      nearTex.clear(box.x, box.y, box.width, box.height);
+      nearTex.fill(0x000000, DARKNESS.memoryDarkness, box.x, box.y, box.width, box.height);
+    }
+    for (const player of this.players) {
+      this.eraseLight(near, 'light', r, player.x, player.y);
+    }
+  }
+
   private spawnEntities(): void {
     const start = this.dungeon.playerStart;
-    this.player = new Player(this, tileToWorld(start.x), tileToWorld(start.y));
-
-    if (gameState.blocksScreech) {
-      this.playerMuffs = this.add.sprite(this.player.x, this.player.y - 9, 'earmuffs').setScale(0.85);
-    }
+    this.players = gameState.players.map((sheet, i) => {
+      // Player two lands one tile to the side. The start tile is always floor and
+      // rooms are never one tile wide, so there is room; if the neighbour happened
+      // to be rock, the collider simply pushes them back out onto the start tile.
+      const p = new Player(this, tileToWorld(start.x + (i === 0 ? 0 : 1)), tileToWorld(start.y), sheet);
+      // A coloured ring under the feet, so two people wearing the same avatar are
+      // still tellable apart at a glance. Only in co-op — on your own it is clutter.
+      if (gameState.isCoop) {
+        this.footRings.set(
+          p,
+          this.add
+            .image(p.x, p.y + 11, 'footring')
+            .setTint(i === 0 ? COOP.playerOneTint : COOP.playerTwoTint)
+            .setDepth(3)
+        );
+      }
+      if (sheet.blocksScreech) {
+        this.playerMuffs.set(p, this.add.sprite(p.x, p.y - 9, 'earmuffs').setScale(0.85));
+      }
+      return p;
+    });
 
     this.monsters = this.physics.add.group({ runChildUpdate: false });
     for (const m of this.dungeon.monsters) {
@@ -245,15 +408,18 @@ export class DungeonScene extends Phaser.Scene {
       this.chests.create(tileToWorld(c.x), tileToWorld(c.y), 'chest').setDepth(5).refreshBody();
     }
 
-    this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.monsters, this.walls);
     this.physics.add.collider(this.monsters, this.monsters);
-    this.physics.add.collider(this.player, this.doors, undefined, () => {
-      this.tryUnlockNearestDoor();
-      return true;
-    });
     this.physics.add.collider(this.monsters, this.doors);
-    this.physics.add.collider(this.player, this.crates);
+
+    for (const player of this.players) {
+      this.physics.add.collider(player, this.walls);
+      this.physics.add.collider(player, this.crates);
+      this.physics.add.collider(player, this.doors, undefined, () => {
+        this.tryUnlockNearestDoor(player);
+        return true;
+      });
+    }
     // Demons chew through what blocks them. The callback runs every frame of
     // contact, so the damage is dealt per second rather than per touch.
     this.physics.add.collider(this.monsters, this.crates, (m, c) => {
@@ -261,22 +427,27 @@ export class DungeonScene extends Phaser.Scene {
       this.damageCrate(c as CrateSprite, (m as Monster).damage * CRATES.chewRate * dt);
     });
 
-    this.physics.add.overlap(this.player, this.monsters, (_p, m) => {
-      const monster = m as Monster;
-      if (this.player.takeDamage(monster.damage, monster.x, monster.y)) {
-        this.cameras.main.shake(120, 0.006);
-        this.emitStats();
-        if (gameState.hp <= 0) this.onDeath();
-      }
-    });
+    for (const player of this.players) {
+      this.physics.add.overlap(player, this.monsters, (_p, m) => {
+        const monster = m as Monster;
+        // You can only be downed while somebody else is still up to come for you.
+        // Alone, running out of health is simply death.
+        const rescuerLeft = this.players.some((o) => o !== player && o.sheet.isPlaying);
+        if (player.takeDamage(monster.damage, monster.x, monster.y, rescuerLeft)) {
+          this.cameras.main.shake(120, 0.006);
+          this.emitStats();
+          if (gameState.living.length === 0) this.onDeath();
+        }
+      });
 
-    this.physics.add.overlap(this.player, this.pickups, (_p, item) => {
-      this.collect(item as Phaser.Physics.Arcade.Sprite);
-    });
+      this.physics.add.overlap(player, this.pickups, (_p, item) => {
+        this.collect(item as Phaser.Physics.Arcade.Sprite, player);
+      });
 
-    this.physics.add.overlap(this.player, this.chests, (_p, c) => {
-      this.openChest(c as Phaser.Physics.Arcade.Sprite);
-    });
+      this.physics.add.overlap(player, this.chests, (_p, c) => {
+        this.openChest(c as Phaser.Physics.Arcade.Sprite, player);
+      });
+    }
 
     if (this.dungeon.sword) {
       const { x, y } = this.dungeon.sword;
@@ -293,7 +464,9 @@ export class DungeonScene extends Phaser.Scene {
         repeat: -1,
         ease: 'Sine.easeInOut',
       });
-      this.physics.add.overlap(this.player, this.sword, () => this.takeSword());
+      for (const player of this.players) {
+        this.physics.add.overlap(player, this.sword, () => this.takeSword(player));
+      }
     }
   }
 
@@ -305,11 +478,22 @@ export class DungeonScene extends Phaser.Scene {
     this.keyS = kb.addKey(Phaser.Input.Keyboard.KeyCodes.S);
     this.keyD = kb.addKey(Phaser.Input.Keyboard.KeyCodes.D);
     this.keySpace = kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.keyEnter = kb.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
 
     // Interact is event-driven rather than polled: a JustDown check only sees the
     // key if a frame happens to land while it is held, so a quick tap can vanish.
     kb.on('keydown-E', this.onInteract, this);
-    kb.on('keydown-Q', this.onDropCrate, this);
+    kb.on('keydown-Q', this.onDropCrateOne, this);
+    kb.on('keydown-SHIFT', this.onDropCrateTwo, this);
+  }
+
+  private onDropCrateOne(): void {
+    this.onDropCrate(this.players[0]);
+  }
+
+  /** Only ever does anything in co-op, where there is a player two to drop it. */
+  private onDropCrateTwo(): void {
+    if (this.players[1]) this.onDropCrate(this.players[1]);
   }
 
   private onInteract(): void {
@@ -318,24 +502,29 @@ export class DungeonScene extends Phaser.Scene {
     else if (this.nearExit && this.monstersLeft === 0) this.escape();
   }
 
-  /** Drops a crate on the tile you are facing, if that tile is free. */
-  private onDropCrate(): void {
-    if (this.transitioning) return;
+  /** Which player E is acting for — whoever is standing on the pad or the portal. */
+  private get shopper(): PlayerState {
+    return (this.interactor ?? this.players[0]).sheet;
+  }
 
-    if (gameState.crates <= 0) {
-      this.floatText(this.player.x, this.player.y - 30, 'NO CRATES LEFT', '#ff8a8a');
+  /** Drops a crate on the tile you are facing, if that tile is free. */
+  private onDropCrate(player: Player): void {
+    if (this.transitioning || player.isDowned) return;
+
+    if (player.sheet.crates <= 0) {
+      this.floatText(player.x, player.y - 30, 'NO CRATES LEFT', '#ff8a8a');
       return;
     }
 
-    const tx = worldToTile(this.player.x + Math.cos(this.player.facing) * TILE);
-    const ty = worldToTile(this.player.y + Math.sin(this.player.facing) * TILE);
+    const tx = worldToTile(player.x + Math.cos(player.facing) * TILE);
+    const ty = worldToTile(player.y + Math.sin(player.facing) * TILE);
     const wx = tileToWorld(tx);
     const wy = tileToWorld(ty);
 
     const blocked =
       !isCrateTile(this.dungeon.grid, tx, ty) ||
-      // Never drop one on your own feet — you would be shoved out of it.
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, wx, wy) < TILE * 0.75 ||
+      // Never drop one on anybody's feet — they would be shoved out of it.
+      this.players.some((o) => Phaser.Math.Distance.Between(o.x, o.y, wx, wy) < TILE * 0.75) ||
       (this.crates.getChildren() as CrateSprite[]).some((c) => c.x === wx && c.y === wy) ||
       (this.chests.getChildren() as Phaser.Physics.Arcade.Sprite[]).some(
         (c) => Phaser.Math.Distance.Between(c.x, c.y, wx, wy) < TILE * 0.75
@@ -345,11 +534,11 @@ export class DungeonScene extends Phaser.Scene {
       );
 
     if (blocked) {
-      this.floatText(this.player.x, this.player.y - 30, 'NO ROOM', '#ff8a8a');
+      this.floatText(player.x, player.y - 30, 'NO ROOM', '#ff8a8a');
       return;
     }
 
-    gameState.crates -= 1;
+    player.sheet.crates -= 1;
     const crate = this.crates.create(wx, wy, 'crate').setDepth(12) as CrateSprite;
     crate.hp = CRATES.maxHp;
     crate.refreshBody();
@@ -381,53 +570,164 @@ export class DungeonScene extends Phaser.Scene {
     if (this.transitioning) return;
     const dt = delta / 1000;
 
-    const dir = new Phaser.Math.Vector2(
-      (this.keyD.isDown || this.cursors.right.isDown ? 1 : 0) -
-        (this.keyA.isDown || this.cursors.left.isDown ? 1 : 0),
-      (this.keyS.isDown || this.cursors.down.isDown ? 1 : 0) -
-        (this.keyW.isDown || this.cursors.up.isDown ? 1 : 0)
-    );
-    this.player.move(dir);
-    this.player.tick(dt);
+    this.players.forEach((player, i) => {
+      player.move(this.readDirection(i));
+      player.tick(dt);
+      // Held rather than tapped: the swing cooldown already paces it.
+      if (this.attackHeld(i) && player.canAttack) this.swing(player);
 
-    const target = new Phaser.Math.Vector2(this.player.x, this.player.y);
+      const muffs = this.playerMuffs.get(player);
+      if (muffs) {
+        // Sit just in front so they never disappear behind their own hood.
+        muffs.setPosition(player.x, player.y - 9).setDepth(player.depth + 0.001);
+      }
+
+      // Just behind the feet, so it reads as standing on the ring rather than in it.
+      this.footRings.get(player)?.setPosition(player.x, player.y + 11);
+    });
+
     for (const m of this.monsters.getChildren() as Monster[]) {
-      m.tick(dt, target);
+      m.tick(dt, this.threatTarget(m));
     }
 
-    // Held rather than tapped: the swing cooldown already paces it.
-    if (this.keySpace.isDown && this.player.canAttack) {
-      this.swing();
-    }
-
-    if (this.playerMuffs) {
-      // Sit just in front of the player so they never disappear behind their own hood.
-      this.playerMuffs.setPosition(this.player.x, this.player.y - 9).setDepth(this.player.depth + 0.001);
-    }
-
+    this.tickRescues(dt);
+    this.trackCamera(dt);
+    this.paintDarkness();
     this.publishBoss();
     this.updatePrompts();
     this.homePickups(dt);
   }
 
-  private swing(): void {
-    const angle = this.player.beginSwing();
+  /**
+   * Player one is WASD and player two is the arrows — but on your own both sets
+   * drive you, exactly as they did before there was a player two.
+   */
+  private readDirection(index: number): Phaser.Math.Vector2 {
+    const wasd = new Phaser.Math.Vector2(
+      (this.keyD.isDown ? 1 : 0) - (this.keyA.isDown ? 1 : 0),
+      (this.keyS.isDown ? 1 : 0) - (this.keyW.isDown ? 1 : 0)
+    );
+    const arrows = new Phaser.Math.Vector2(
+      (this.cursors.right.isDown ? 1 : 0) - (this.cursors.left.isDown ? 1 : 0),
+      (this.cursors.down.isDown ? 1 : 0) - (this.cursors.up.isDown ? 1 : 0)
+    );
+    if (this.players.length < 2) return wasd.lengthSq() > 0 ? wasd : arrows;
+    return index === 0 ? wasd : arrows;
+  }
+
+  private attackHeld(index: number): boolean {
+    if (this.players.length < 2) return this.keySpace.isDown;
+    return index === 0 ? this.keySpace.isDown : this.keyEnter.isDown;
+  }
+
+  /**
+   * Who a demon goes for: the nearest player still on their feet. A downed player
+   * stops being a target, so demons leave a body alone and turn on the rescuer —
+   * which is what makes a rescue a decision rather than a formality.
+   */
+  private threatTarget(m: Monster): Phaser.Math.Vector2 {
+    let best = this.players[0];
+    let bestDist = Infinity;
+    for (const p of this.players) {
+      if (!p.sheet.isPlaying) continue;
+      const d = Phaser.Math.Distance.Between(m.x, m.y, p.x, p.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return new Phaser.Math.Vector2(best.x, best.y);
+  }
+
+  /**
+   * Standing over a fallen player brings them back. Step away and the progress is
+   * lost, so it has to be three uninterrupted seconds with the demons still coming.
+   */
+  private tickRescues(dt: number): void {
+    this.rescueUi.clear();
+    if (this.players.length < 2) return;
+
+    for (const fallen of this.players) {
+      if (!fallen.isDowned) continue;
+
+      const helper = this.players.find(
+        (o) =>
+          o !== fallen &&
+          o.sheet.isPlaying &&
+          Phaser.Math.Distance.Between(o.x, o.y, fallen.x, fallen.y) <= COOP.rescueRange
+      );
+
+      if (!helper) {
+        fallen.sheet.rescueProgress = 0;
+      } else {
+        fallen.sheet.rescueProgress += dt;
+        if (fallen.sheet.rescueProgress >= COOP.rescueTime) {
+          fallen.revive();
+          this.spark(fallen.x, fallen.y, 0x8affc9, 22);
+          this.cameras.main.flash(260, 120, 255, 190);
+          this.floatText(fallen.x, fallen.y - 30, 'BACK UP!', '#8affc9');
+          this.emitStats();
+          continue;
+        }
+      }
+
+      // A bar over the body: the only way to know how much longer to stand there.
+      const pct = Phaser.Math.Clamp(fallen.sheet.rescueProgress / COOP.rescueTime, 0, 1);
+      const w = 42;
+      this.rescueUi
+        .fillStyle(0x000000, 0.7)
+        .fillRoundedRect(fallen.x - w / 2, fallen.y - 30, w, 7, 3)
+        .fillStyle(helper ? 0x8affc9 : 0x6b6478, 1)
+        .fillRoundedRect(fallen.x - w / 2 + 1, fallen.y - 29, Math.max(2, (w - 2) * pct), 5, 2);
+    }
+  }
+
+  /**
+   * With one player the camera simply follows them. With two it sits at the midpoint
+   * and pulls back far enough to hold both — down to COOP.minZoom, past which they
+   * are left to separate rather than shrinking the game to nothing.
+   */
+  private trackCamera(dt: number): void {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    // Downed players count: the camera must never leave a body off screen, because
+    // walking back to it is the whole rescue.
+    for (const p of this.players) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    }
+    this.camAnchor.setPosition((minX + maxX) / 2, (minY + maxY) / 2);
+    if (this.players.length < 2) return;
+
+    const margin = 240;
+    const want = Phaser.Math.Clamp(
+      Math.min(WORLD.viewWidth / (maxX - minX + margin), WORLD.viewHeight / (maxY - minY + margin)),
+      COOP.minZoom,
+      1
+    );
+    const cam = this.cameras.main;
+    cam.setZoom(Phaser.Math.Linear(cam.zoom, want, Math.min(1, dt * 3.5)));
+  }
+
+  private swing(player: Player): void {
+    const angle = player.beginSwing();
+    const star = player.sheet.hasStarSword;
 
     const arc = this.add
-      .sprite(
-        this.player.x + Math.cos(angle) * 14,
-        this.player.y + Math.sin(angle) * 14,
-        'swing'
-      )
+      .sprite(player.x + Math.cos(angle) * 14, player.y + Math.sin(angle) * 14, 'swing')
       .setRotation(angle)
       .setDepth(30)
       .setBlendMode(Phaser.BlendModes.ADD)
-      .setScale(gameState.hasStarSword ? 0.95 : 0.7)
-      .setTint(gameState.hasStarSword ? 0xfff6cf : 0xffffff);
+      .setScale(star ? 0.95 : 0.7)
+      .setTint(star ? 0xfff6cf : 0xffffff);
     this.tweens.add({
       targets: arc,
       alpha: { from: 0.9, to: 0 },
-      scale: gameState.hasStarSword ? 1.25 : 0.95,
+      scale: star ? 1.25 : 0.95,
       duration: 160,
       onComplete: () => arc.destroy(),
     });
@@ -437,29 +737,29 @@ export class DungeonScene extends Phaser.Scene {
 
     for (const m of [...(this.monsters.getChildren() as Monster[])]) {
       if (!m.active) continue;
-      if (!isInSwingArc(this.player, angle, m, m.stats.radius, PLAYER.attackRange, maxArc)) continue;
+      if (!isInSwingArc(player, angle, m, m.stats.radius, PLAYER.attackRange, maxArc)) continue;
 
-      const toMonster = Math.atan2(m.y - this.player.y, m.x - this.player.x);
+      const toMonster = Math.atan2(m.y - player.y, m.x - player.x);
       hitAny = true;
-      const killed = m.takeDamage(gameState.damage, toMonster);
+      const killed = m.takeDamage(player.sheet.damage, toMonster);
       this.spark(m.x, m.y, 0xffffff, 6);
-      if (killed) this.killMonster(m);
+      if (killed) this.killMonster(m, player);
     }
 
     // Your own crates are in the way of your own sword — that is the way out of a
     // box you have walled yourself into.
     for (const c of [...(this.crates.getChildren() as CrateSprite[])]) {
       if (!c.active) continue;
-      if (!isInSwingArc(this.player, angle, c, TILE / 2, PLAYER.attackRange, maxArc)) continue;
+      if (!isInSwingArc(player, angle, c, TILE / 2, PLAYER.attackRange, maxArc)) continue;
       hitAny = true;
       this.spark(c.x, c.y, 0xa87a37, 4);
-      this.damageCrate(c, gameState.damage);
+      this.damageCrate(c, player.sheet.damage);
     }
 
     if (hitAny) this.cameras.main.shake(80, 0.003);
   }
 
-  private killMonster(m: Monster): void {
+  private killMonster(m: Monster, by: Player): void {
     const { x, y } = m;
     const coins = m.coinValue;
     const wasBoss = m.stats.boss;
@@ -478,7 +778,7 @@ export class DungeonScene extends Phaser.Scene {
 
     // Every kill drops its coins plus a key fragment. Three fragments make a key.
     this.dropPickup(x, y, 'coin', { coins });
-    for (let i = 0; i < gameState.fragmentsPerKill; i++) {
+    for (let i = 0; i < by.sheet.fragmentsPerKill; i++) {
       this.dropPickup(x, y, 'fragment', { fragment: true });
     }
 
@@ -491,10 +791,11 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   /** Picks up the Star Sword: your swing becomes a flat 500 for the rest of the floor. */
-  private takeSword(): void {
-    if (!this.sword?.active || gameState.hasStarSword) return;
+  private takeSword(player: Player): void {
+    // One sword, and it goes to whoever got there first.
+    if (!this.sword?.active || gameState.players.some((p) => p.hasStarSword)) return;
 
-    gameState.hasStarSword = true;
+    player.sheet.hasStarSword = true;
     const { x, y } = this.sword;
     this.sword.destroy();
     this.sword = undefined;
@@ -502,7 +803,7 @@ export class DungeonScene extends Phaser.Scene {
     this.cameras.main.flash(500, 255, 246, 207);
     this.spark(x, y, 0xfff6cf, 26);
     this.floatText(x, y - 24, PLANET.swordName.toUpperCase(), '#fff6cf');
-    this.floatText(this.player.x, this.player.y - 40, `SWING ${PLANET.swordDamage}`, '#ffd15c');
+    this.floatText(player.x, player.y - 40, `SWING ${PLANET.swordDamage}`, '#ffd15c');
     this.emitStats();
   }
 
@@ -538,20 +839,30 @@ export class DungeonScene extends Phaser.Scene {
 
     this.floatText(m.x, m.y - 22, 'SCREEEECH!', '#ffffff');
 
-    if (gameState.blocksScreech) {
-      this.floatText(this.player.x, this.player.y - 30, 'MUFFLED', '#ff9ecb');
-      this.spark(this.player.x, this.player.y - 9, 0xff9ecb, 8);
-      return;
+    // Each player's own ears decide: one pair of earmuffs never covers two heads,
+    // and standing out of earshot is its own answer.
+    let landedOnAnyone = false;
+    for (const player of this.players) {
+      if (!player.sheet.isPlaying) continue;
+      if (Phaser.Math.Distance.Between(m.x, m.y, player.x, player.y) > SCREECH.range) continue;
+
+      if (player.sheet.blocksScreech) {
+        this.floatText(player.x, player.y - 30, 'MUFFLED', '#ff9ecb');
+        this.spark(player.x, player.y - 9, 0xff9ecb, 8);
+        continue;
+      }
+
+      landedOnAnyone = true;
+      player.sheet.screechTimer = SCREECH.duration;
+      this.floatText(
+        player.x,
+        player.y - 30,
+        `ATTACK -${Math.round(SCREECH.attackReduction * 100)}%`,
+        '#ff8a8a'
+      );
     }
 
-    gameState.screechTimer = SCREECH.duration;
-    this.cameras.main.shake(200, 0.004);
-    this.floatText(
-      this.player.x,
-      this.player.y - 30,
-      `ATTACK -${Math.round(SCREECH.attackReduction * 100)}%`,
-      '#ff8a8a'
-    );
+    if (landedOnAnyone) this.cameras.main.shake(200, 0.004);
     this.emitStats();
   }
 
@@ -580,29 +891,41 @@ export class DungeonScene extends Phaser.Scene {
       item.setData('age', age);
       if (age < 0.35) continue;
 
-      const d = Phaser.Math.Distance.Between(item.x, item.y, this.player.x, this.player.y);
-      if (d < 190) {
-        const a = Math.atan2(this.player.y - item.y, this.player.x - item.x);
-        const pull = Phaser.Math.Linear(520, 180, Math.min(1, d / 190));
+      // Nearest player still on their feet: loot should not chase a body.
+      let target: Player | undefined;
+      let best = Infinity;
+      for (const player of this.players) {
+        if (!player.sheet.isPlaying) continue;
+        const d = Phaser.Math.Distance.Between(item.x, item.y, player.x, player.y);
+        if (d < best) {
+          best = d;
+          target = player;
+        }
+      }
+
+      if (target && best < 190) {
+        const a = Math.atan2(target.y - item.y, target.x - item.x);
+        const pull = Phaser.Math.Linear(520, 180, Math.min(1, best / 190));
         item.body!.velocity.set(Math.cos(a) * pull, Math.sin(a) * pull);
       }
     }
   }
 
-  private collect(item: Phaser.Physics.Arcade.Sprite): void {
-    if (!item.active) return;
+  private collect(item: Phaser.Physics.Arcade.Sprite, by: Player): void {
+    if (!item.active || by.isDowned) return;
     const coins = item.getData('coins') as number | undefined;
     const fragment = item.getData('fragment') as boolean | undefined;
 
     if (coins) {
-      gameState.addCoins(coins);
-      this.floatText(item.x, item.y, `+${Math.round(coins * gameState.coinMultiplier)}`, '#ffc93c');
+      // The pot is shared, but it is the collector's own MORE! that swells it.
+      gameState.addCoins(coins, by.sheet);
+      this.floatText(item.x, item.y, `+${Math.round(coins * by.sheet.coinMultiplier)}`, '#ffc93c');
     }
     if (fragment) {
       const { keysGained } = gameState.addFragments(1);
       if (keysGained > 0) {
         gameState.keys += keysGained;
-        this.floatText(this.player.x, this.player.y - 34, 'KEY FORGED', '#ffd15c');
+        this.floatText(by.x, by.y - 34, 'KEY FORGED', '#ffd15c');
         this.cameras.main.flash(180, 255, 209, 92);
       }
     }
@@ -610,16 +933,16 @@ export class DungeonScene extends Phaser.Scene {
     this.emitStats();
   }
 
-  private openChest(chest: Phaser.Physics.Arcade.Sprite): void {
-    if (chest.getData('opened')) return;
+  private openChest(chest: Phaser.Physics.Arcade.Sprite, by: Player): void {
+    if (chest.getData('opened') || by.isDowned) return;
     chest.setData('opened', true);
 
     const loot = Phaser.Math.Between(180, 340) * (1 + 0.15 * (gameState.floor - 1));
-    gameState.addCoins(loot);
-    this.floatText(chest.x, chest.y - 16, `+${Math.round(loot * gameState.coinMultiplier)} coins`, '#ffc93c');
+    gameState.addCoins(loot, by.sheet);
+    this.floatText(chest.x, chest.y - 16, `+${Math.round(loot * by.sheet.coinMultiplier)} coins`, '#ffc93c');
     this.spark(chest.x, chest.y, 0xffc93c, 16);
 
-    this.player.heal(Math.round(gameState.maxHp * 0.25));
+    by.heal(Math.round(by.maxHp * 0.25));
     this.floatText(chest.x, chest.y - 34, '+25% HP', '#4ade80');
 
     this.tweens.add({ targets: chest, alpha: 0.35, duration: 250 });
@@ -629,13 +952,13 @@ export class DungeonScene extends Phaser.Scene {
 
   // --- doors, shop, exit --------------------------------------------------
 
-  private tryUnlockNearestDoor(): void {
-    if (gameState.keys <= 0) return;
+  private tryUnlockNearestDoor(by: Player): void {
+    if (gameState.keys <= 0 || by.isDowned) return;
 
     let nearest: DoorSprite | null = null;
     let best = Infinity;
     for (const d of this.doors.getChildren() as DoorSprite[]) {
-      const dist = Phaser.Math.Distance.Between(d.x, d.y, this.player.x, this.player.y);
+      const dist = Phaser.Math.Distance.Between(d.x, d.y, by.x, by.y);
       if (dist < best) {
         best = dist;
         nearest = d;
@@ -662,46 +985,59 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private updatePrompts(): void {
-    const nearShop =
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.shopPad.x, this.shopPad.y) <
-      TILE * 1.3;
-    const nearExit =
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, this.exitPortal.x, this.exitPortal.y) <
-      TILE * 1.4;
-    this.nearShop = nearShop;
-    this.nearExit = nearExit;
+    // In co-op either player can be the one standing on the pad, so the prompt is
+    // anchored to whoever is actually in reach rather than to player one.
+    const near = (target: Phaser.GameObjects.Sprite, within: number) =>
+      this.players.find(
+        (p) => p.sheet.isPlaying && Phaser.Math.Distance.Between(p.x, p.y, target.x, target.y) < within
+      );
+
+    const atShop = near(this.shopPad, TILE * 1.3);
+    const atExit = near(this.exitPortal, TILE * 1.4);
+    this.nearShop = atShop !== undefined;
+    this.nearExit = atExit !== undefined;
+    this.interactor = atShop ?? atExit;
 
     let text = '';
+    let anchor = atShop ?? atExit;
 
-    if (nearShop) text = 'E — Shop';
-    else if (nearExit)
+    if (atShop) text = 'E — Shop';
+    else if (atExit)
       text =
         this.monstersLeft === 0
           ? 'E — Escape to the next floor'
           : `Sealed — ${this.monstersLeft} demon${this.monstersLeft === 1 ? '' : 's'} still breathing`;
-    else if (this.nearestDoorDistance() < TILE * 1.6)
-      text = gameState.keys > 0 ? 'Walk into the door to unlock' : 'Locked — you need a full key';
+    else {
+      const atDoor = this.nearestDoorTo();
+      if (atDoor) {
+        anchor = atDoor;
+        text = gameState.keys > 0 ? 'Walk into the door to unlock' : 'Locked — you need a full key';
+      }
+    }
 
-    if (text) {
-      this.prompt.setText(text).setPosition(this.player.x, this.player.y - 26).setVisible(true);
+    if (text && anchor) {
+      this.prompt.setText(text).setPosition(anchor.x, anchor.y - 26).setVisible(true);
     } else {
       this.prompt.setVisible(false);
     }
-
   }
 
-  private nearestDoorDistance(): number {
-    let best = Infinity;
-    for (const d of this.doors.getChildren() as DoorSprite[]) {
-      best = Math.min(best, Phaser.Math.Distance.Between(d.x, d.y, this.player.x, this.player.y));
+  /** The player standing next to a locked door, if anybody is. */
+  private nearestDoorTo(): Player | undefined {
+    for (const player of this.players) {
+      if (!player.sheet.isPlaying) continue;
+      for (const d of this.doors.getChildren() as DoorSprite[]) {
+        if (Phaser.Math.Distance.Between(d.x, d.y, player.x, player.y) < TILE * 1.6) return player;
+      }
     }
-    return best;
+    return undefined;
   }
 
   private openShop(): void {
     if (this.scene.isActive('Shop')) return;
     this.scene.pause();
-    this.scene.launch('Shop', { returnTo: 'Dungeon' });
+    // The party's coins, but the upgrade goes to whoever walked onto the pad.
+    this.scene.launch('Shop', { returnTo: 'Dungeon', buyerIndex: this.shopper.index });
   }
 
   private escape(): void {
@@ -712,7 +1048,12 @@ export class DungeonScene extends Phaser.Scene {
     gameState.floor += 1;
     gameState.deepestFloor = Math.max(gameState.deepestFloor, gameState.floor);
     // Escaping patches you up a little — enough to keep going, not enough to coast.
-    gameState.hp = Math.min(gameState.maxHp, gameState.hp + Math.round(gameState.maxHp * 0.35));
+    // A player who was down when the floor ended is picked back up by leaving it.
+    for (const p of gameState.players) {
+      p.downed = false;
+      p.rescueProgress = 0;
+      p.hp = Math.min(p.maxHp, Math.max(p.hp, 1) + Math.round(p.maxHp * 0.35));
+    }
     gameState.save();
 
     this.cameras.main.fadeOut(400, 0, 0, 0);

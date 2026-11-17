@@ -1,4 +1,4 @@
-import { BOSS, FLOOR, KEYS, PLANET, TILE, WORLD, type MonsterKind } from './config';
+import { BOSS, DARKNESS, FLOOR, KEYS, PLANET, TILE, WORLD, type MonsterKind } from './config';
 
 export const TileType = {
   Wall: 0,
@@ -107,6 +107,15 @@ export function isPlanetFloor(floor: number): boolean {
 /** Bosses stand on every tenth floor: 10, 20, 30, 40 and on down. */
 export function isBossFloor(floor: number): boolean {
   return floor >= BOSS.everyNFloors && floor % BOSS.everyNFloors === 0;
+}
+
+/**
+ * The lights are out on every twentieth floor: 20, 40, 60 and on down. Every one of
+ * these is also a boss floor, since 20 is a multiple of 10 — a dark floor always has
+ * a Demon Lord somewhere in it.
+ */
+export function isDarkFloor(floor: number): boolean {
+  return floor >= DARKNESS.everyNFloors && floor % DARKNESS.everyNFloors === 0;
 }
 
 /** How many monsters live on a given floor. */

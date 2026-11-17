@@ -189,6 +189,49 @@ export const CRATES = {
   chewRate: 1,
 };
 
+/**
+ * Every twentieth floor the lights go out. The floor is pitch black except for what
+ * your own light reaches, and the ground you have already walked stays dimly lit
+ * behind you — so a dark floor is mapped by walking it, not by looking at it.
+ */
+export const DARKNESS = {
+  /** Floors that go dark: 20, 40, 60 and so on. */
+  everyNFloors: 20,
+  /** How far your light reaches right now, in pixels. Eight tiles. */
+  lightRadius: 8 * TILE,
+  /**
+   * How much of that you keep. Smaller than lightRadius on purpose: the far edge of
+   * what you can see is not remembered, so ground has to be walked to stay lit.
+   */
+  memoryRadius: 6 * TILE,
+  /** How black remembered ground stays. 0 is full daylight, 1 is unvisited black. */
+  memoryDarkness: 0.66,
+  /** Pixels the player must move before the trail is stamped again. */
+  stampDistance: 6,
+};
+
+/**
+ * Two players on one keyboard. Running out of health puts you on the floor rather
+ * than ending the run, and the other player can pick you up — so a bad moment costs
+ * the party time instead of the floor.
+ */
+export const COOP = {
+  /** Seconds the rescuer must stand over you. Long enough to be a real decision. */
+  rescueTime: 3,
+  /** How close they have to be, in pixels. */
+  rescueRange: 46,
+  /** Health you get back, as a share of your own maximum. */
+  reviveHealth: 0.5,
+  /**
+   * The camera pulls back to hold both players. Below 1 the world is drawn smaller,
+   * and this is the furthest it will go before they are simply left to separate.
+   */
+  minZoom: 0.62,
+  /** Ring colours under each player's feet, so two identical avatars stay apart. */
+  playerOneTint: 0xffd15c,
+  playerTwoTint: 0x8affc9,
+};
+
 export const FLOOR = {
   /** Monster count on floor n = base + perFloor * (n - 1), capped. */
   baseMonsters: 9,
