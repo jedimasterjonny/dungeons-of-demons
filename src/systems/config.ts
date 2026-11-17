@@ -68,6 +68,23 @@ export const PLANET = {
   swordDamage: 500,
 };
 
+/**
+ * The ????? Shard. Every Demon Lord on every tenth floor gives you one when it falls.
+ * Each is a tiny power-up on its own; all ten together make a massive one, and it is
+ * aimed at exactly one enemy: Thanos.
+ */
+export const SHARDS = {
+  name: '????? Shard',
+  /** Floors whose boss gives a shard: 10, 20, 30 and so on. */
+  everyNFloors: BOSS.everyNFloors,
+  /** The tiny power-up: added to your own swing, per shard. */
+  damagePerShard: 2,
+  /** Shards that make the massive power-up. One from each Demon Lord, 10 to 100. */
+  forMassive: 10,
+  /** The massive power-up: every hit on Thanos counts this many times over. */
+  thanosMultiplier: 4,
+};
+
 export type MonsterKind = 'imp' | 'brute' | 'wraith' | 'boss' | 'thanos';
 
 export interface MonsterStats {

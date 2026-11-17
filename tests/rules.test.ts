@@ -1,10 +1,10 @@
 import { GameState, PlayerState, UPGRADES } from '../src/systems/state';
 import { damageFor, isInSwingArc, maxHpFor, wrapAngle } from '../src/systems/combat';
-import { BOSS, COOP, CRATES, CURRENCY, DARKNESS, KEYS, PLAYER, MONSTERS, FLOOR, PLANET, SCREECH } from '../src/systems/config';
+import { BOSS, COOP, CRATES, CURRENCY, DARKNESS, KEYS, PLAYER, MONSTERS, FLOOR, PLANET, SCREECH, SHARDS } from '../src/systems/config';
 import { TileType, generateDungeon, isBossFloor, isCrateTile, isDarkFloor, isPlanetFloor } from '../src/systems/dungeon';
 import { STORIES, storyAfterFloor, hasStoryAfter } from '../src/systems/stories';
 import { AVATARS, DEFAULT_AVATAR, isAvatarId } from '../src/systems/avatars';
-import { BEAT, THEME, themeLength } from '../src/systems/music';
+import { BEAT, CHEESE_THEME, DUM_THEME, THEME, themeLength } from '../src/systems/music';
 
 let pass = 0;
 let fail = 0;
@@ -666,15 +666,147 @@ console.log('\nRULE: what the party shares, and what it does not');
   check('and leaves player one alone', one.level('edge') === before);
 }
 
+// Stand on floor f and pick up whatever shard is lying there.
+const pickUpShardOn = (s: GameState, f: number) => {
+  s.floor = f;
+  return s.earnShard();
+};
+
+console.log('\nRULE: every 10 floors the Demon Lord drops a ????? shard');
+{
+  const s = new GameState();
+  s.reset();
+  check('it is called the ????? Shard', SHARDS.name === '????? Shard');
+  check('you start with none', s.me.shards === 0);
+  s.floor = 9;
+  check('floor 9 has no shard', !s.shardOnThisFloor && !s.earnShard());
+  s.floor = 10;
+  check('floor 10 has one', s.shardOnThisFloor);
+  check('picking it up gives you one', s.earnShard() && s.me.shards === 1);
+  check('and then it is gone from the floor', !s.shardOnThisFloor);
+  check('dying and killing the boss again does not give a second', !s.earnShard() && s.me.shards === 1);
+  check('floor 20 gives the second', pickUpShardOn(s, 20) && s.me.shards === 2);
+  check('Thanos on floor 101 is not a tenth floor', !pickUpShardOn(s, 101) && s.me.shards === 2);
+
+  const t = new GameState();
+  t.reset();
+  for (let f = 1; f <= 100; f++) pickUpShardOn(t, f);
+  check('picking up every one, 10 to 100, gives exactly 10', t.me.shards === 10, `${t.me.shards}`);
+
+  check('shards are saved', new GameState().me.shards === 10);
+  const w = new GameState();
+  w.reset();
+  check('and wiping the save takes them away', w.me.shards === 0 && new GameState().me.shards === 0);
+}
+
+console.log('\nRULE: if you leave a shard behind, it is gone');
+{
+  const s = new GameState();
+  s.reset();
+  pickUpShardOn(s, 10);
+  // Floor 20's Demon Lord dies, nobody picks up the shard, and you take the stairs.
+  s.floor = 21;
+  check('the next floor has nothing to give', !s.shardOnThisFloor && !s.earnShard());
+  check('so you still have 1', s.me.shards === 1);
+  check('floor 30 still gives one', pickUpShardOn(s, 30) && s.me.shards === 2);
+  s.floor = 20;
+  check('and going back is no use: floor 20\'s is gone for good', !s.shardOnThisFloor);
+  check('remembered after a reload too', new GameState().shardFloor === 30);
+
+  const t = new GameState();
+  t.reset();
+  for (let f = 10; f <= 100; f += 10) if (f !== 50) pickUpShardOn(t, f);
+  t.floor = 101;
+  check('miss one and you reach Thanos with 9', t.me.shards === 9);
+  check('and no massive power', !t.me.hasMassivePower);
+  t.reset();
+}
+
+console.log('\nRULE: each shard is a tiny power-up');
+{
+  const s = new GameState();
+  s.reset();
+  const before = s.me.damage;
+  pickUpShardOn(s, 10);
+  check('one shard = +2 damage', s.me.damage === before + 2, `${before} -> ${s.me.damage}`);
+  pickUpShardOn(s, 20);
+  pickUpShardOn(s, 30);
+  check('three shards = +6 damage', s.me.damage === before + 6, `${s.me.damage}`);
+  s.me.hasStarSword = true;
+  check('the Star Sword is still exactly 500, shards or not', s.me.damage === PLANET.swordDamage, `${s.me.damage}`);
+}
+
+console.log('\nRULE: all 10 shards make a MASSIVE power-up to beat Thanos');
+{
+  const s = new GameState();
+  s.reset();
+  for (let f = 10; f <= 90; f += 10) pickUpShardOn(s, f);
+  check('9 shards is not enough', !s.me.hasMassivePower);
+  s.me.hasStarSword = true;
+  check('so the Star Sword hits Thanos for 500', s.me.damageAgainst(MONSTERS.thanos) === 500);
+
+  pickUpShardOn(s, 100);
+  check('10 shards is the massive power', s.me.hasMassivePower);
+  const hit = s.me.damageAgainst(MONSTERS.thanos);
+  check('the Star Sword now hits Thanos for 2,000', hit === 2000, `${hit}`);
+  const swings = Math.ceil(MONSTERS.thanos.maxHp / hit);
+  check('so Thanos takes 20 swings instead of 80', swings === 20, `${swings}`);
+  check('it is only for Thanos: a Demon Lord still takes 500', s.me.damageAgainst(MONSTERS.boss) === 500);
+  check('and so does an imp', s.me.damageAgainst(MONSTERS.imp) === 500);
+
+  s.me.hasStarSword = false;
+  check('without the sword it still works on Thanos', s.me.damageAgainst(MONSTERS.thanos) === s.me.damage * 4);
+
+  s.me.hasStarSword = true;
+  s.me.screechTimer = 3;
+  check('a screech still weakens it (300 x 4 = 1,200)', s.me.damageAgainst(MONSTERS.thanos) === 1200, `${s.me.damageAgainst(MONSTERS.thanos)}`);
+  s.me.screechTimer = 0;
+  check('the sword itself is still run-scoped', (s.me.refreshForFloor(), !s.me.hasStarSword));
+  check('but the shards are not', s.me.shards === 10);
+}
+
+console.log('\nRULE: in co-op both players get every shard');
+{
+  const s = new GameState();
+  s.reset();
+  pickUpShardOn(s, 10);
+  s.setPlayerCount(2);
+  const [one, two] = s.players;
+  check('player two joins with player one\'s shards', two.shards === 1);
+  check('whoever picks up the next one, both of you get it', pickUpShardOn(s, 20) && one.shards === 2 && two.shards === 2);
+  s.setPlayerCount(1);
+}
+
+console.log('\nRULE: an old save gets the shards it already earned');
+{
+  const old = (deepestFloor: number, extra: Record<string, unknown> = {}) => {
+    localStorage.setItem('dungeons-of-demons/save/v1', JSON.stringify({
+      coins: 0, galaxyCoins: 0, floor: deepestFloor, deepestFloor, upgrades: {}, avatar: 'delver', musicOff: false, ...extra,
+    }));
+    return new GameState().me.shards;
+  };
+  check('still on floor 10: the boss is not beaten yet, 0', old(10) === 0);
+  check('reached floor 11: beat one Demon Lord, 1', old(11) === 1);
+  check('reached floor 57: beat five, 5', old(57) === 5);
+  check('reached the planet: all 10', old(101) === 10);
+  check('a real shard count is kept as it is', old(101, { shards: 4 }) === 4);
+  check('a broken one is worked out again', old(101, { shards: 'lots' }) === 10 && old(31, { shards: -3 }) === 3);
+  old(57);
+  const g = new GameState();
+  check('and the shards it was given cannot be picked up again', g.shardFloor === 50);
+  check('but the next one can', pickUpShardOn(g, 60) && g.me.shards === 6);
+  new GameState().reset();
+}
+
 console.log('\nRULE: the theme tune goes dum dumdum dummmm dom dom dam');
 {
   // The tune he sang, written out as syllables. Both halves of the theme use the
   // same rhythm, so the sung line has to come back exactly twice.
-  const sung = THEME.filter((n) => n.name !== null).map((n) => n.say);
+  const sung = DUM_THEME.filter((n) => n.name !== null).map((n) => n.say);
   const asked = ['dum', 'dum', 'dum', 'dummmm', 'dom', 'dom', 'dam'];
   check('it is his line, twice', JSON.stringify(sung) === JSON.stringify([...asked, ...asked]), sung.join(' '));
 
-  const beats = THEME.filter((n) => n.name !== null).map((n) => n.beats);
+  const beats = DUM_THEME.filter((n) => n.name !== null).map((n) => n.beats);
   check('one dum to start', beats[0] === 2, `${beats[0]}`);
   check('then dumdum, two quick ones', beats[1] === 1 && beats[2] === 1, `${beats[1]},${beats[2]}`);
   check('then dummmm, the long one', beats[3] === 4, `${beats[3]}`);
@@ -683,16 +815,45 @@ console.log('\nRULE: the theme tune goes dum dumdum dummmm dom dom dam');
   check('and dam is held at the end', beats[6] === 4);
 
   // The shape: the held note is the top of the tune and the tail walks back down.
-  const first = THEME.slice(0, 7).map((n) => n.name);
+  const first = DUM_THEME.slice(0, 7).map((n) => n.name);
   check('dummmm is the highest note', first[3] === 'A3', `${first[3]}`);
   check('and it comes home on the note it started on', first[0] === first[6], `${first[0]} vs ${first[6]}`);
 
-  check('every note has a pitch or is a rest', THEME.every((n) => n.name === null || n.beats > 0));
-  check('it breathes between the halves', THEME.some((n) => n.name === null));
+  check('every note has a pitch or is a rest', DUM_THEME.every((n) => n.name === null || n.beats > 0));
+  check('it breathes between the halves', DUM_THEME.some((n) => n.name === null));
 
-  const secs = themeLength();
-  check('one time round takes about 8 seconds', secs > 6 && secs < 10, `${secs.toFixed(1)}s`);
+  const dumSecs = DUM_THEME.reduce((t, n) => t + n.beats * BEAT, 0);
+  check('one time round takes about 8 seconds', dumSecs > 6 && dumSecs < 10, `${dumSecs.toFixed(1)}s`);
   check('and it is played slowly, not rushed', BEAT >= 0.18, `${BEAT}`);
+}
+
+console.log('\nRULE: the second theme goes boy girl cat mouse cheese');
+{
+  const sung = CHEESE_THEME.filter((n) => n.name !== null).map((n) => n.say);
+  const asked = ['boy', 'girl', 'cat', 'mouse', 'cheese'];
+  check('it is his line, twice', JSON.stringify(sung) === JSON.stringify([...asked, ...asked]), sung.join(' '));
+
+  const notes = CHEESE_THEME.filter((n) => n.name !== null);
+  const beats = notes.map((n) => n.beats);
+  check('cat mouse are quick, the cat right behind the mouse', beats[2] === 1 && beats[3] === 1);
+  check('cheese is held the longest', beats[4] === Math.max(...beats) && beats[4] === 4);
+
+  // Up the stairs to the cheese, then back down home.
+  const hz = (n: string) => ['D3', 'E3', 'F3', 'G3', 'A3', 'C4', 'D4', 'F4'].indexOf(n);
+  const up = notes.slice(0, 5).map((n) => hz(n.name!));
+  const down = notes.slice(5).map((n) => hz(n.name!));
+  check('every word climbs a step the first time', up.every((v, i) => i === 0 || v > up[i - 1]), up.join(','));
+  check('and comes back down the second time', down.every((v, i) => i === 0 || v < down[i - 1]), down.join(','));
+  check('so the last cheese is home, where the first theme starts',
+    notes[9].name === DUM_THEME[0].name, `${notes[9].name} vs ${DUM_THEME[0].name}`);
+  check('every note is a real pitch', notes.every((n) => hz(n.name!) >= 0));
+
+  // The two take turns, so the loop is one of each, in order.
+  check('the dum theme plays first', THEME.slice(0, DUM_THEME.length).every((n, i) => n === DUM_THEME[i]));
+  check('then the cheese theme', THEME.slice(DUM_THEME.length).every((n, i) => n === CHEESE_THEME[i]));
+  check('and nothing else', THEME.length === DUM_THEME.length + CHEESE_THEME.length);
+  const secs = themeLength();
+  check('both together take about 14 seconds', secs > 12 && secs < 16, `${secs.toFixed(1)}s`);
 }
 
 console.log('\nRULE: you can turn the music off, and it stays off');

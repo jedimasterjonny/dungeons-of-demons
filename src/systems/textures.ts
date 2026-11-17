@@ -146,6 +146,14 @@ export function buildTextures(scene: Phaser.Scene): void {
   g.fillStyle(0xc98d13, 1).fillRect(SW / 2 - 2, 22, 4, 4);
   emit('starsword', SW, SW);
 
+  // --- ????? shard: a violet crystal splinter, in colour and left untinted
+  const SH = 24;
+  g.fillStyle(0xc8a2ff, 0.3).fillCircle(SH / 2, SH / 2, 11);
+  g.fillStyle(0x9b5de5, 1).fillTriangle(SH / 2, 2, SH / 2 + 6, 12, SH / 2, 22);
+  g.fillStyle(0x6b3fa8, 1).fillTriangle(SH / 2, 2, SH / 2 - 6, 12, SH / 2, 22);
+  g.fillStyle(0xe6d4ff, 1).fillTriangle(SH / 2, 4, SH / 2 + 3, 11, SH / 2, 15);
+  emit('shard', SH, SH);
+
   // --- coin
   g.fillStyle(0xffc93c, 1).fillCircle(7, 7, 6);
   g.lineStyle(1.5, 0xc98d13, 1).strokeCircle(7, 7, 5.5);

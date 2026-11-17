@@ -37,7 +37,7 @@ npm run dev        # http://localhost:5173
 | Shop / escape    | E                 | E          | E          |
 
 - **ENTER** on the title screen — one player. **2** — two players.
-- **M** — theme tune on/off, from anywhere in the game
+- **M** — theme tunes on/off, from anywhere in the game
 - **↑↓ / ENTER / ESC** — navigate the shop
 - **BACKSPACE** on the title screen — wipe the save
 
@@ -131,6 +131,49 @@ against your 190), so crates and kiting are the strategy rather than an option.
 
 Beat him and the eleventh chapter plays, the castle comes back for you, and the floors
 carry on from 102 as normal.
+
+## The ????? Shards
+
+> Earn shards, get MASSIVE power and have fun hitting Thanos!
+
+That is the front cover — the line across the top of the title screen.
+
+**Every tenth floor the Demon Lord drops a ????? Shard** where it falls, on floors 10,
+20, 30 and on down: a violet crystal, bobbing on the floor. It does not fly to you
+like coins do. **Walk over it to take it. Leave the floor without it and it is gone for
+good.** The HUD counts the ones you have under your keys (◆ 3/10).
+
+**Each shard is a tiny power-up: +2 damage** on your own swing, for good. Ten of them is
++20, the same as four levels of Edge.
+
+**All ten shards make a MASSIVE power-up to beat Thanos.** With ten, every hit you land
+on Thanos counts **four times**. The Star Sword's 500 becomes 2,000 against him, so he
+takes **20 swings instead of 80**. Picking up the tenth announces it, and landing on
+the planet with all ten announces it again. Miss even one and you face Thanos without it.
+
+| Shards | Your swing    | Star Sword on Thanos | Swings to beat Thanos |
+| ------ | ------------- | -------------------- | --------------------- |
+| 0      | 20 + Edge     | 500                  | 80                    |
+| 3      | 26 + Edge     | 500                  | 80                    |
+| 9      | 38 + Edge     | 500                  | 80                    |
+| **10** | **40 + Edge** | **2,000**            | **20**                |
+
+The rules underneath:
+
+- The +2 is added to your *own* swing. The Star Sword still replaces it with a flat 500,
+  so the sword is worth the same to everyone, as before.
+- The ×4 is aimed at Thanos only. Every other demon on the planet still takes 500.
+- A screech still bites: screeched, the sword hits Thanos for 300 × 4 = 1,200.
+- Shards are saved, like upgrades. The save also remembers the last floor whose shard
+  was picked up (`shardFloor`), so dying after taking one and beating the boss again on
+  the replay never pays twice. Floors only go up, so that one number covers every floor.
+- In co-op whoever picks it up, both players get it, and player two joins with player
+  one's.
+- A save made before shards existed is given the ones already earned: one for each
+  Demon Lord above the deepest floor reached.
+
+Worth knowing: the boss dies at sword's length, so its shard usually lands a step from
+your feet — forgetting it takes real effort, or a portal reached in a hurry. `SHARDS` in `config.ts` holds every number.
 
 ## The crates
 
@@ -259,7 +302,30 @@ The vowel changing from "u" to "o" to "a" is where the tune turns around, so the
 **dummmm** is the top note and the descending "dom dom dam" walks back down. The theme
 plays the line twice: the first half lands back on D, settled, and the second lands on
 A, which does not settle — which is what makes it want to come round again. About eight
-and a half seconds to the loop.
+and a half seconds for this one.
+
+### The second theme
+
+> boy girl cat mouse cheese
+
+The two themes take turns: dum dumdum first, then this one, then round again — about
+fourteen seconds for both. It is a chase up the stairs. Each word is one step higher,
+"cat mouse" are run together quickly because the cat is right behind the mouse, and
+**cheese** is held at the top because that is what everyone was running for.
+
+| Word       | Eighth-notes | Going up | Coming down |
+| ---------- | ------------ | -------- | ----------- |
+| boy        | 2            | D3       | C4          |
+| girl       | 2            | F3       | A3          |
+| cat        | 1            | G3       | G3          |
+| mouse      | 1            | A3       | F3          |
+| **cheese** | **4**        | **C4**   | **D3**      |
+
+Going up, cheese lands high on C and does not settle — still being chased. Coming down,
+it lands on D, home, which is exactly the note dum dumdum starts on, so the hand-back
+between the two themes is seamless. He gave the words, not the rhythm or the notes; the
+rhythm and pitches above are one reading of them, and each is a one-line change in
+`CHEESE` / `CHEESE_THEME` in `src/systems/music.ts`.
 
 Each note is a triangle for the body, a quiet detuned square for the edge, and a sine an
 octave down on the longer notes for weight, through a lowpass at 1.4 kHz. That
