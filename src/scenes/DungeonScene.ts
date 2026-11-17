@@ -189,14 +189,15 @@ export class DungeonScene extends Phaser.Scene {
     // Stamp the floor only where you can actually walk. A world-sized tileSprite
     // would paint the solid rock too, making rooms and corridors invisible.
     // One render texture keeps it to a single draw call instead of ~1000 sprites.
+    // Phaser 4 queues stamps and batches them itself; render() runs the queue.
     const ground = this.add.renderTexture(0, 0, worldW, worldH).setOrigin(0).setDepth(0);
-    ground.beginDraw();
+    const topLeft = { originX: 0, originY: 0 };
     for (let y = 0; y < WORLD.rows; y++) {
       for (let x = 0; x < WORLD.cols; x++) {
-        if (grid[y][x] !== TileType.Wall) ground.batchDrawFrame('floor', undefined, x * TILE, y * TILE);
+        if (grid[y][x] !== TileType.Wall) ground.stamp('floor', undefined, x * TILE, y * TILE, topLeft);
       }
     }
-    ground.endDraw();
+    ground.render();
 
     this.walls = this.physics.add.staticGroup();
     this.doors = this.physics.add.staticGroup();
@@ -291,13 +292,13 @@ export class DungeonScene extends Phaser.Scene {
    */
   private buildDarkness(worldW: number, worldH: number): void {
     const seen = this.add.renderTexture(0, 0, worldW, worldH).setOrigin(0).setDepth(100);
-    seen.fill(0x000000, 1);
+    seen.fill(0x000000, 1).render();
 
     const near = this.add.renderTexture(0, 0, worldW, worldH).setOrigin(0).setDepth(101);
 
-    // make(), not add(): a brush that rendered normally would be a white blob
+    // Constructed, not add()ed: a brush on the display list would be a white blob
     // following the player around.
-    const brush = this.make.image({ key: 'light' }, false).setOrigin(0.5);
+    const brush = new Phaser.GameObjects.Image(this, 0, 0, 'light').setOrigin(0.5);
 
     this.dark = {
       seen,
@@ -321,7 +322,10 @@ export class DungeonScene extends Phaser.Scene {
     const brush = this.dark!.brush;
     const size = this.textures.get(key).getSourceImage().width;
     brush.setTexture(key).setPosition(x, y).setScale((radius * 2) / size);
-    target.erase(brush);
+    // render() straight away, every time. Phaser 4 queues the brush itself, not where
+    // it was, so without this every erase this frame would land wherever the brush
+    // ended up last. Flushing also runs any clear/fill queued before it, in order.
+    target.erase(brush).render();
   }
 
   private paintDarkness(): void {

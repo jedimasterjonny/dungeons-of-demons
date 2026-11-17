@@ -86,10 +86,15 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     this.hitFlash = Math.max(0, this.hitFlash - dt);
     this.screechCooldown = Math.max(0, this.screechCooldown - dt);
 
-    // setTintFill flashes a solid silhouette, which reads on full-colour sprites too.
-    if (this.hitFlash > 0) this.setTintFill(0xffffff);
-    else if (this.stats.tint === 0xffffff) this.clearTint();
-    else this.setTint(this.stats.tint);
+    // FILL flashes a solid silhouette, which reads on full-colour sprites too. Since
+    // Phaser 4, setTint() no longer drops you out of FILL, so the mode is put back
+    // to MULTIPLY explicitly — otherwise every demon stays a white blob after a hit.
+    if (this.hitFlash > 0) this.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+    else {
+      this.setTintMode(Phaser.TintModes.MULTIPLY);
+      if (this.stats.tint === 0xffffff) this.clearTint();
+      else this.setTint(this.stats.tint);
+    }
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, target.x, target.y);
     // Aggro is sticky: once it has seen you, it keeps coming.
