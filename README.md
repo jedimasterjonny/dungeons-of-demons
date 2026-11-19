@@ -34,6 +34,7 @@ npm run dev        # http://localhost:5173
 | Move             | WASD or arrows    | WASD       | Arrows     |
 | Swing            | SPACE             | SPACE      | ENTER      |
 | Drop a crate     | Q                 | Q          | SHIFT      |
+| Drop a cage      | C                 | C          | /          |
 | Shop / escape    | E                 | E          | E          |
 
 - **ENTER** on the title screen — one player. **2** — two players.
@@ -47,8 +48,9 @@ npm run dev        # http://localhost:5173
 fragments assemble into a whole key. The HUD shows whole keys plus pips for the
 fragments you're carrying toward the next one.
 
-**You cannot escape until every demon on the floor is dead.** The exit portal is
-sealed red and stays that way until the last one falls, then turns green.
+**You cannot escape until every demon on the floor is dead, and every grave is
+smashed.** The exit portal is sealed red and stays that way until the last one goes,
+then turns green. See [The graves](#the-graves).
 
 **Every twentieth floor is dark.** You see only what your own light reaches, and only
 the ground you have already walked stays lit behind you. See [The dark floors](#the-dark-floors).
@@ -136,7 +138,10 @@ carry on from 102 as normal.
 
 > Earn shards, get MASSIVE power and have fun hitting Thanos!
 
-That is the front cover — the line across the top of the title screen.
+That is the front cover — the line across the top of the title screen. Under it, a
+wraith, a brute and an imp stand either side of the title: the real sprites from the
+dungeon in their own colours, three times the size. The imps hop, the brutes stomp and
+the wraiths float (`COVER` and `BOB` in `src/scenes/TitleScene.ts`).
 
 **Every tenth floor the Demon Lord drops a ????? Shard** where it falls, on floors 10,
 20, 30 and on down: a violet crystal, bobbing on the floor. It does not fly to you
@@ -166,7 +171,9 @@ The rules underneath:
 - A screech still bites: screeched, the sword hits Thanos for 300 × 4 = 1,200.
 - Shards are saved, like upgrades. The save also remembers the last floor whose shard
   was picked up (`shardFloor`), so dying after taking one and beating the boss again on
-  the replay never pays twice. Floors only go up, so that one number covers every floor.
+  the replay never pays twice. Leaving a floor with its shard still lying there moves
+  that number up too, so a trap that sends you back to the floor cannot give you
+  a second chance at a shard you left behind (see [the traps](#the-traps)).
 - In co-op whoever picks it up, both players get it, and player two joins with player
   one's.
 - A save made before shards existed is given the ones already earned: one for each
@@ -174,6 +181,72 @@ The rules underneath:
 
 Worth knowing: the boss dies at sword's length, so its shard usually lands a step from
 your feet — forgetting it takes real effort, or a portal reached in a hurry. `SHARDS` in `config.ts` holds every number.
+
+## The traps
+
+> there are some tiles that will do bad stuff. (e.g. going back a level, coins going
+> down.) the screen will say 'out witted!'
+>
+> but you can tell. some (keep that in mind) say: T (tiny)
+
+Every floor has **three trap tiles**. Step on one and the screen says **OUT WITTED!**
+in big red letters, with what it just did to you underneath:
+
+| Trap          | What it does                                           |
+| ------------- | ------------------------------------------------------ |
+| Back a level  | Everything freezes for a moment, then you go up a floor |
+| Coins go down | The party loses 10% of its coins (dying costs 20%)      |
+
+**Two of the three have a tiny T on them.** It is a shade lighter than the floor, so
+you see it if you are looking. The third looks exactly like floor. Each trap goes off
+once and leaves a red crack where it was.
+
+- Traps are never in the room you land in, never under a chest, and never on the shop
+  pad, the portal or a doorway. They can be anywhere else, vaults included.
+- **Floor 1 has nowhere to go back to**, so its traps only ever take coins.
+- Going back a level keeps your deepest floor, your keys and your health (you are not
+  healed the way the portal heals you). The floor you land on is a fresh one, full of
+  demons again: floors are built from their number, so floor 13 is always the same
+  floor 13, traps and all.
+- A story chapter plays the first time you clear its floor, not again if a trap sends
+  you back up to it.
+- A shard you left lying is still gone if a trap sends you back to its floor. A shard
+  that never dropped (a trap got you before the Demon Lord fell) is still waiting.
+- In co-op either player can set one off, and it hits the whole party.
+
+`TRAPS` in `config.ts` holds the numbers: how many per floor, how many have a T, and
+the coin loss. They are placed after everything else on the floor is generated, so
+adding them did not move a single room, demon or chest on any existing floor.
+
+## The giving tiles
+
+> now there are giving tiles. exact opposite
+
+Every floor also has **three giving tiles**, and they do exactly what a trap does the
+other way round. The screen says **LUCKY!** in big green letters:
+
+| Giving tile       | What it does                                              |
+| ----------------- | --------------------------------------------------------- |
+| Forward a level   | Everything freezes for a moment, then you go down a floor |
+| Coins go up       | The party gains 10% of its coins — the same 10% a trap takes |
+
+**Two of the three have a tiny G**, the same size and shade as a trap's T, so a sharp
+eye can tell a G from a T. The third looks exactly like floor. Each goes off once and
+leaves a green sparkle where it was.
+
+- **A giving tile never skips a Demon Lord or Thanos.** On floors 10, 20, 30 … 100 and
+  on the planet, giving tiles only give coins. That is the mirror of floor 1's traps,
+  and it means you can never skip a boss, its shard, or the chapter after it.
+- Going forward counts: it is your new deepest floor. It does not heal you the way the
+  portal does.
+- A trap and a giving tile are never on the same tile, and every rule about where traps
+  can go applies to giving tiles too.
+- 10% of no coins is no coins. With an empty purse a coin gift gives nothing, just as
+  a coin trap takes nothing.
+
+In the code a trap and a giving tile are one thing, a `SpecialTile` with `good` set or
+not, since one is exactly the other flipped. `GIFTS` in `config.ts` has its own numbers,
+so they can be tuned apart later. "LUCKY!" is a placeholder until he names it.
 
 ## The crates
 
@@ -243,7 +316,7 @@ trail left even the ground under your feet looking half-lit.
 
 ## The screech
 
-Wraiths — the fast, weaving blue demons that start showing up on floor 3 — do not just
+Wraiths — the fast, weaving blue demons that rise out of graves from floor 3 — do not just
 chase you. Once one has you in sight and is within earshot it plants its feet, screams,
 and pushes out a ring of noise. It costs you no health at all. It makes your swing
 **40% weaker for 5 seconds**, which is worse: the demon you were two hits from killing
@@ -260,6 +333,63 @@ can see them: pink and fuzzy, worn on your head for the rest of the game.
 Whether a screech lands is decided in exactly one place (`blocksScreech` in
 `state.ts`), so there is no path where the muffs are on and the noise still gets
 through. Any demon can be made a screecher by flipping `screecher: true` in `MONSTERS`.
+
+## The graves
+
+> also, wraiths come from graves. these have to be destroyed incase wraiths stop spawning
+
+From floor 3, **no wraith is ever just standing on the floor when it starts.** Every
+one comes out of a grave instead: a grey headstone with a cross on it, two to a floor,
+always in a main room you can walk to without a key and never in the room you land in.
+
+- Each grave raises **one wraith as the floor begins**, then **another every 10 seconds**.
+- It waits while **2 of its own wraiths** are still about, so the floor never floods.
+  Kill one and the 10 seconds start again.
+- Smash a grave with your sword: **200 health**, ten swings at your starting damage. It
+  fades as it cracks, like a crate. A smashed grave raises nothing ever again, but the
+  wraiths it already raised are still out there.
+- **The portal stays sealed while any grave is standing**, even with every demon dead,
+  because otherwise more would just keep coming. The HUD counts both:
+  `22 demons · 2 graves remaining`.
+- Graves block you and every demon except wraiths. Wraiths are ghosts; they float
+  straight through headstones.
+
+The demons that used to start a floor as wraiths start as imps and brutes instead, so
+every floor still has the same number of demons in the same places, and the same key
+economy. `GRAVES` in `config.ts` holds every number.
+
+## The cage maker
+
+> cage maker. find cage pieces to make one. imps can't escape, brutes can, but only
+> in 100 moves. wraiths can escape immediately.
+
+**Three cage pieces make one cage.** Three pieces lie somewhere on every floor (a
+little barred panel, bobbing), vaults included, so each floor has exactly one cage to
+find. The HUD shows whole cages, with pips for the pieces toward the next, like keys.
+
+Press **C** (player two: **/**) and a cage slams down over the **nearest demon within
+three tiles**. Inside it, a demon **cannot move and cannot hurt you**, even if you stand
+in the cage with it. You can still hit it through the bars.
+
+| Demon      | In a cage                                                         |
+| ---------- | ----------------------------------------------------------------- |
+| Imp        | **Can't escape.** It is in there until you kill it                |
+| Brute      | **Escapes in 100 moves.** The count is over the cage: 100, 99, 98… |
+| Wraith     | **Escapes immediately.** It slips out, and the cage is used up     |
+| Demon Lord | Too big for a cage. You keep the cage                             |
+| Thanos     | Too big for a cage. You keep the cage                             |
+
+A brute rattles the bars **4 moves a second**, so 100 moves is **25 seconds**, and the
+cage shakes with every one. A cage is used up whatever happens: it breaks when its
+demon breaks out or dies.
+
+A caged demon is not a dead one, so the portal still wants it dead. The cage is for
+holding it still while you deal with everything else, or while you hit it.
+
+Cages and pieces are run-scoped, like keys: they carry from floor to floor, the party
+shares them, and dying or starting from the title loses them. They are never saved.
+How long each demon lasts is `cageMoves` in `MONSTERS`, so every kind of demon has a
+cage rule; the rest is `CAGES` in `config.ts`.
 
 ## Your avatar
 
@@ -451,7 +581,8 @@ The last row of the shop exchanges 3,000 coins for a galaxy coin.
 
 You lose 20% of your coins and restart the current floor. **Upgrades are permanent** —
 they're the thing that carries a bad run forward. Coins, galaxy coins, upgrades and
-your current floor persist to `localStorage`; keys and fragments are run-scoped.
+your current floor persist to `localStorage`; keys, fragments, cages and cage pieces
+are run-scoped.
 
 ## Layout
 

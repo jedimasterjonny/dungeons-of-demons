@@ -85,6 +85,8 @@ export class GameOverScene extends Phaser.Scene {
     }
     gameState.keys = 0;
     gameState.fragments = 0;
+    gameState.cages = 0;
+    gameState.cagePieces = 0;
     this.scene.start('Dungeon');
   }
 }

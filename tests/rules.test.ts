@@ -1,6 +1,6 @@
 import { GameState, PlayerState, UPGRADES } from '../src/systems/state';
 import { damageFor, isInSwingArc, maxHpFor, wrapAngle } from '../src/systems/combat';
-import { BOSS, COOP, CRATES, CURRENCY, DARKNESS, KEYS, PLAYER, MONSTERS, FLOOR, PLANET, SCREECH, SHARDS } from '../src/systems/config';
+import { BOSS, CAGES, COOP, CRATES, CURRENCY, DARKNESS, KEYS, PLAYER, MONSTERS, FLOOR, PLANET, SCREECH, SHARDS, GIFTS, GRAVES, TRAPS } from '../src/systems/config';
 import { TileType, generateDungeon, isBossFloor, isCrateTile, isDarkFloor, isPlanetFloor } from '../src/systems/dungeon';
 import { STORIES, storyAfterFloor, hasStoryAfter } from '../src/systems/stories';
 import { AVATARS, DEFAULT_AVATAR, isAvatarId } from '../src/systems/avatars';
@@ -884,6 +884,155 @@ console.log('\nRULE: deeper floors are meaningfully harder');
   check('floor 1 uses base stats', impHp(1) === MONSTERS.imp.maxHp, `${impHp(1)}`);
   check('floor 5 imps are tougher', impHp(5) > impHp(1), `${impHp(1)} -> ${impHp(5)}`);
   check('threat outpaces reward', FLOOR.hpScalePerFloor > FLOOR.coinScalePerFloor);
+}
+
+console.log('\nRULE: some tiles do bad stuff, and the screen says OUT WITTED!');
+{
+  check('the screen says OUT WITTED!', TRAPS.message === 'OUT WITTED!');
+  const floors = [...Array(25).keys()].map((i) => i + 1).concat([100, 101]);
+  check(
+    `every floor has ${TRAPS.perFloor} of them`,
+    floors.every((f) => generateDungeon(f).traps.length === TRAPS.perFloor)
+  );
+  const effects = floors.slice(1).flatMap((f) => generateDungeon(f).traps.map((t) => t.effect));
+  check('some send you back a level', effects.includes('level'));
+  check('some make your coins go down', effects.includes('coins'));
+  check(
+    'on floor 1 there is no level to go back to, so they only take coins',
+    generateDungeon(1).traps.every((t) => t.effect === 'coins')
+  );
+  check('they are all traps, not gifts', floors.every((f) => generateDungeon(f).traps.every((t) => !t.good)));
+  const marked = (f: number) => generateDungeon(f).traps.filter((t) => t.marked).length;
+  check('you can tell some of them: they have a tiny T', floors.every((f) => marked(f) > 0));
+  check('but only some: on every floor at least one has no T', floors.every((f) => marked(f) < TRAPS.perFloor));
+  check('the traps are the same every time you play a floor', JSON.stringify(generateDungeon(7).traps) === JSON.stringify(generateDungeon(7).traps));
+
+  const s = new GameState();
+  s.reset();
+  s.coins = 5000;
+  check('a coin trap takes 10%: 5,000 coins -> lose 500', s.tileCoins(false) === 500 && s.coins === 4500, `${s.coins}`);
+  check('the coins stay gone after a reload', new GameState().coins === 4500);
+  s.coins = 0;
+  check('with no coins there is nothing to take', s.tileCoins(false) === 0 && s.coins === 0);
+  check('a trap takes less than dying does (20%)', TRAPS.coinLoss < 0.2);
+
+  s.floor = 14;
+  s.deepestFloor = 14;
+  s.goToFloor(13, false);
+  check('going back a level: floor 14 -> floor 13', s.floor === 13);
+  check('your deepest floor is still 14', s.deepestFloor === 14);
+  check('and it is saved', new GameState().floor === 13);
+  s.goToFloor(14, false);
+  check('the portal still takes you down again', s.floor === 14 && s.deepestFloor === 14);
+  s.floor = 1;
+  s.goToFloor(0, false);
+  check('you can never go above floor 1', s.floor === 1);
+}
+
+console.log('\nRULE: giving tiles are the exact opposite');
+{
+  const floors = [...Array(25).keys()].map((i) => i + 1).concat([100, 101]);
+  check(`every floor has ${GIFTS.perFloor} of them`, floors.every((f) => generateDungeon(f).gifts.length === GIFTS.perFloor));
+  check('they are all gifts, not traps', floors.every((f) => generateDungeon(f).gifts.every((t) => t.good)));
+  const effects = floors.flatMap((f) => generateDungeon(f).gifts.map((t) => t.effect));
+  check('some send you forward a level', effects.includes('level'));
+  check('some make your coins go up', effects.includes('coins'));
+  const marked = (f: number) => generateDungeon(f).gifts.filter((t) => t.marked).length;
+  check('you can tell some of them: they have a tiny G', floors.every((f) => marked(f) > 0));
+  check('but only some', floors.every((f) => marked(f) < GIFTS.perFloor));
+  const noSkip = [10, 20, 100, 101];
+  check(
+    'you can never skip a Demon Lord or Thanos: on 10, 20, 100 and 101 they only give coins',
+    noSkip.every((f) => generateDungeon(f).gifts.every((t) => t.effect === 'coins'))
+  );
+  check(
+    'a trap and a giving tile are never on the same tile',
+    floors.every((f) => {
+      const d = generateDungeon(f);
+      const at = new Set(d.traps.map((t) => `${t.x},${t.y}`));
+      return d.gifts.every((g) => !at.has(`${g.x},${g.y}`));
+    })
+  );
+
+  const s = new GameState();
+  s.reset();
+  s.coins = 5000;
+  check('a coin gift adds 10%: 5,000 coins -> get 500', s.tileCoins(true) === 500 && s.coins === 5500, `${s.coins}`);
+  check('the coins stay after a reload', new GameState().coins === 5500);
+  check('exactly the opposite of a trap: 10% each way', GIFTS.coinGain === TRAPS.coinLoss);
+
+  s.floor = 14;
+  s.deepestFloor = 14;
+  s.goToFloor(15, false);
+  check('going forward a level: floor 14 -> floor 15', s.floor === 15);
+  check('and that is your new deepest floor', s.deepestFloor === 15);
+  check('saved', new GameState().floor === 15 && new GameState().deepestFloor === 15);
+}
+
+console.log('\nRULE: cage maker — find cage pieces to make one');
+{
+  const s = new GameState();
+  s.reset();
+  check('1 piece = no cage yet', !s.addCagePiece() && s.cages === 0 && s.cagePieces === 1);
+  check('2 pieces = still no cage', !s.addCagePiece() && s.cages === 0 && s.cagePieces === 2);
+  check('3 pieces = 1 cage', s.addCagePiece() && s.cages === 1 && s.cagePieces === 0);
+  for (let i = 0; i < 4; i++) s.addCagePiece();
+  check('7 pieces = 2 cages and 1 piece toward the next', s.cages === 2 && s.cagePieces === 1, `${s.cages} + ${s.cagePieces}`);
+  const floors = [...Array(25).keys()].map((i) => i + 1).concat([100, 101]);
+  check(
+    `every floor has ${CAGES.piecesPerFloor} pieces to find: one whole cage`,
+    floors.every((f) => generateDungeon(f).cagePieces.length === CAGES.piecesPerFloor) &&
+      CAGES.piecesPerFloor === CAGES.piecesPerCage
+  );
+  s.save();
+  check('cages are like keys: never saved', new GameState().cages === 0 && new GameState().cagePieces === 0);
+  s.reset();
+  check('and wiping the save takes them away', s.cages === 0 && s.cagePieces === 0);
+
+  check('imps can NOT escape', MONSTERS.imp.cageMoves === Infinity);
+  check('brutes can, but only in 100 moves', MONSTERS.brute.cageMoves === 100);
+  check('wraiths escape immediately', MONSTERS.wraith.cageMoves === 0);
+  check('the Demon Lord is too big for a cage', MONSTERS.boss.cageMoves === null);
+  check('so is Thanos', MONSTERS.thanos.cageMoves === null);
+  check('every kind of demon has a cage rule', Object.values(MONSTERS).every((m) => m.cageMoves !== undefined));
+  check('100 moves takes a brute 25 seconds', MONSTERS.brute.cageMoves! / CAGES.movesPerSecond === 25);
+}
+
+console.log('\nRULE: wraiths come from graves, and graves have to be destroyed');
+{
+  const floors = [...Array(25).keys()].map((i) => i + 1).concat([100, 101]);
+  check(
+    'no wraith is ever just standing on a floor when it starts',
+    floors.every((f) => generateDungeon(f).monsters.every((m) => m.kind !== 'wraith'))
+  );
+  check('floors 1 and 2 have no graves', generateDungeon(1).graves.length === 0 && generateDungeon(2).graves.length === 0);
+  check(
+    `from floor ${GRAVES.fromFloor} every floor has ${GRAVES.perFloor} graves`,
+    floors.filter((f) => f >= GRAVES.fromFloor).every((f) => generateDungeon(f).graves.length === GRAVES.perFloor)
+  );
+  check('a grave takes 10 swings at your starting damage', GRAVES.maxHp / PLAYER.baseDamage === 10);
+  check('a grave never floods the floor: it waits while 2 of its wraiths are still about', GRAVES.maxWraiths === 2);
+}
+
+console.log('\nRULE: a trap cannot give you back a shard you left behind');
+{
+  const s = new GameState();
+  s.reset();
+  pickUpShardOn(s, 10);
+  // Floor 20: the Demon Lord falls, nobody picks up the shard, and you take the portal.
+  s.floor = 20;
+  s.goToFloor(21, true);
+  // Then a trap on 21 sends you straight back up to 20.
+  s.goToFloor(20, false);
+  check('back on floor 20, its shard is still gone', !s.shardOnThisFloor && !s.earnShard());
+  check('so you still have 1', s.me.shards === 1);
+
+  // Floor 30: a trap gets you BEFORE the Demon Lord is dead. No shard ever dropped.
+  s.floor = 30;
+  s.goToFloor(29, false);
+  s.goToFloor(30, false);
+  check('a shard that never dropped is still waiting when you come back', s.shardOnThisFloor);
+  check('and you can win it', s.earnShard() && s.me.shards === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

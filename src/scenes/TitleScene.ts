@@ -1,8 +1,22 @@
 import Phaser from 'phaser';
-import { WORLD } from '../systems/config';
+import { MONSTERS, WORLD, type MonsterKind } from '../systems/config';
 import { gameState } from '../systems/state';
 
 const FONT = 'system-ui, sans-serif';
+
+/** His demons on the front cover: [kind, x, y] on the left, mirrored on the right. */
+const COVER: [MonsterKind, number, number][] = [
+  ['wraith', 250, 217],
+  ['brute', 160, 265],
+  ['imp', 270, 300],
+];
+
+/** How each one moves: imps hop, brutes stomp, wraiths float. */
+const BOB: Partial<Record<MonsterKind, { dy: number; ms: number }>> = {
+  imp: { dy: -9, ms: 240 },
+  brute: { dy: -3, ms: 620 },
+  wraith: { dy: -12, ms: 1300 },
+};
 
 export class TitleScene extends Phaser.Scene {
   constructor() {
@@ -26,6 +40,22 @@ export class TitleScene extends Phaser.Scene {
       frequency: 180,
       blendMode: Phaser.BlendModes.ADD,
     });
+
+    for (const [kind, x, y] of COVER) {
+      const bob = BOB[kind]!;
+      for (const at of [x, W - x]) {
+        const demon = this.add.image(at, y, kind).setScale(3).setTint(MONSTERS[kind].tint);
+        this.tweens.add({
+          targets: demon,
+          y: y + bob.dy,
+          duration: bob.ms,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+          delay: Math.random() * bob.ms,
+        });
+      }
+    }
 
     // His front cover.
     this.add
@@ -116,6 +146,8 @@ export class TitleScene extends Phaser.Scene {
       p.hp = p.maxHp;
     }
     gameState.keys = 0;
+    gameState.cages = 0;
+    gameState.cagePieces = 0;
     this.cameras.main.fadeOut(300, 0, 0, 0);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       this.scene.start('Dungeon');

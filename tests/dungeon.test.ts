@@ -1,5 +1,5 @@
 import { generateDungeon, TileType, isBossFloor, isPlanetFloor, monsterCountFor } from '../src/systems/dungeon';
-import { KEYS, WORLD } from '../src/systems/config';
+import { CAGES, GIFTS, GRAVES, KEYS, TRAPS, WORLD } from '../src/systems/config';
 
 let failures = 0;
 const fail = (floor: number, msg: string) => {
@@ -69,6 +69,51 @@ for (const floor of FLOORS) {
   for (const c of d.chests) {
     if (at(c) === TileType.Wall) fail(floor, `chest inside a wall at ${c.x},${c.y}`);
   }
+
+  // Traps and giving tiles hide in plain floor: never in rock, a doorway, the shop pad
+  // or the portal, never under a chest, never in the room you land in, never on each other.
+  const start = d.rooms[0];
+  const special = [...d.traps, ...d.gifts];
+  if (new Set(special.map(key)).size !== TRAPS.perFloor + GIFTS.perFloor) {
+    fail(floor, `expected ${TRAPS.perFloor} traps and ${GIFTS.perFloor} giving tiles, all on separate tiles`);
+  }
+  for (const t of special) {
+    if (at(t) !== TileType.Floor) fail(floor, `trap on a tile that is not plain floor at ${t.x},${t.y}`);
+    if (d.chests.some((c) => key(c) === key(t))) fail(floor, `trap under a chest at ${t.x},${t.y}`);
+    if (t.x >= start.x && t.x < start.x + start.w && t.y >= start.y && t.y < start.y + start.h) {
+      fail(floor, `trap in the room you land in at ${t.x},${t.y}`);
+    }
+    if (floor === 1 && !t.good && t.effect === 'level') fail(floor, 'a trap on floor 1 tries to send you back');
+    if ((isBossFloor(floor) || isPlanetFloor(floor)) && t.good && t.effect === 'level') {
+      fail(floor, 'a giving tile skips the boss');
+    }
+  }
+  const ts = d.traps.filter((t) => t.marked).length;
+  if (ts !== TRAPS.marked) fail(floor, `expected ${TRAPS.marked} traps with a tiny T, found ${ts}`);
+  const gs = d.gifts.filter((t) => t.marked).length;
+  if (gs !== GIFTS.marked) fail(floor, `expected ${GIFTS.marked} giving tiles with a tiny G, found ${gs}`);
+
+  // Graves hold the portal shut, so every one must be reachable with no keys at all,
+  // and never in the room you land in. Cage pieces can be anywhere a key can reach.
+  const wantGraves = floor >= GRAVES.fromFloor ? GRAVES.perFloor : 0;
+  if (d.graves.length !== wantGraves) fail(floor, `expected ${wantGraves} graves, found ${d.graves.length}`);
+  if (d.cagePieces.length !== CAGES.piecesPerFloor) fail(floor, `expected ${CAGES.piecesPerFloor} cage pieces`);
+  const placed = [...special, ...d.graves, ...d.cagePieces];
+  if (new Set(placed.map(key)).size !== placed.length) fail(floor, 'two things share one tile');
+  for (const g of d.graves) {
+    if (at(g) !== TileType.Floor) fail(floor, `grave not on plain floor at ${g.x},${g.y}`);
+    if (!walkable.has(key(g))) fail(floor, `GRAVE at ${g.x},${g.y} needs a key to reach — portal could stay shut`);
+    if (g.x >= start.x && g.x < start.x + start.w && g.y >= start.y && g.y < start.y + start.h) {
+      fail(floor, `grave in the room you land in at ${g.x},${g.y}`);
+    }
+    if (d.chests.some((c) => key(c) === key(g))) fail(floor, `grave on a chest at ${g.x},${g.y}`);
+  }
+  for (const p of d.cagePieces) {
+    if (at(p) !== TileType.Floor) fail(floor, `cage piece not on plain floor at ${p.x},${p.y}`);
+    if (!withKeys.has(key(p))) fail(floor, `cage piece at ${p.x},${p.y} can never be reached`);
+    if (d.chests.some((c) => key(c) === key(p))) fail(floor, `cage piece on a chest at ${p.x},${p.y}`);
+  }
+  if (d.monsters.some((m) => m.kind === 'wraith')) fail(floor, 'a wraith placed up front — they come from graves');
 
   // Boss floors carry one extra monster: the boss itself, in the portal room.
   const bosses = d.monsters.filter((m) => m.kind === 'boss');

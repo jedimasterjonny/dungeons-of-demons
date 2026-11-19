@@ -181,6 +181,48 @@ export function buildTextures(scene: Phaser.Scene): void {
   g.fillStyle(0x4a3315, 1).fillRect(2, 12, C - 4, 2);
   emit('chest', C, C);
 
+  // --- sprung trap: the floor cracked open where you were out witted. Tinted at runtime.
+  g.lineStyle(2, 0xffffff, 1);
+  const crack = [[5, 7, 13, 14], [13, 14, 10, 21], [10, 21, 18, 27], [18, 27, 27, 24], [13, 14, 23, 11], [23, 11, 27, 4], [10, 21, 3, 26]];
+  for (const [x1, y1, x2, y2] of crack) g.lineBetween(x1, y1, x2, y2);
+  emit('trap', TILE, TILE);
+
+  // --- the tiny T that gives some traps away. Drawn white, tinted at runtime.
+  g.fillStyle(0xffffff, 1).fillRect(1, 1, 8, 2).fillRect(4, 1, 2, 8);
+  emit('trapT', 10, 10);
+
+  // --- the tiny G on some giving tiles. Same size and colour as the T.
+  g.fillStyle(0xffffff, 1).fillRect(1, 1, 8, 2).fillRect(1, 1, 2, 8).fillRect(1, 7, 8, 2);
+  g.fillRect(7, 4, 2, 5).fillRect(5, 4, 4, 2);
+  emit('giftG', 10, 10);
+
+  // --- used giving tile: a four-point sparkle, the opposite of the trap's crack.
+  const mid = TILE / 2;
+  g.fillStyle(0xffffff, 1)
+    .fillTriangle(mid, 4, mid - 3, mid, mid + 3, mid)
+    .fillTriangle(mid, TILE - 4, mid - 3, mid, mid + 3, mid)
+    .fillTriangle(4, mid, mid, mid - 3, mid, mid + 3)
+    .fillTriangle(TILE - 4, mid, mid, mid - 3, mid, mid + 3);
+  emit('gift', TILE, TILE);
+
+  // --- cage: bars on a frame, big enough to drop over a brute. Drawn white, tinted.
+  const CG = 40;
+  g.fillStyle(0xffffff, 1).fillRect(0, 0, CG, 4).fillRect(0, CG - 4, CG, 4);
+  for (let x = 0; x <= CG - 3; x += 9.25) g.fillRect(x, 0, 3, CG);
+  emit('cage', CG, CG);
+
+  // --- cage piece: one barred panel, a quarter-size cage lying on the floor
+  g.fillStyle(0xffffff, 1).fillRect(0, 0, 14, 3).fillRect(0, 11, 14, 3);
+  g.fillRect(0, 0, 3, 14).fillRect(5.5, 0, 3, 14).fillRect(11, 0, 3, 14);
+  emit('cagepiece', 14, 14);
+
+  // --- grave: a round-topped headstone with a cross, on a heap of earth. In colour.
+  g.fillStyle(0x3a2a1e, 1).fillEllipse(14, 29, 28, 7);
+  g.fillStyle(0x8a8496, 1).fillRoundedRect(5, 4, 18, 25, { tl: 9, tr: 9, bl: 1, br: 1 });
+  g.fillStyle(0x6b6578, 1).fillRect(5, 24, 18, 5);
+  g.fillStyle(0x4a4556, 1).fillRect(13, 8, 2, 12).fillRect(9, 11, 10, 2);
+  emit('grave', 28, 32);
+
   // --- swing arc: a crescent of blobs along the swing path, thickest at the middle.
   // Built from circles rather than a subtracted ring because generateTexture bakes
   // fills as opaque pixels — punching a hole with a second fill would leave black.
