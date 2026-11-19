@@ -102,6 +102,11 @@ export interface MonsterStats {
   boss: boolean;
   /** Shown on the boss health bar. */
   label: string;
+  /**
+   * Moves it takes to break out of a cage. Infinity never gets out, 0 slips straight
+   * back out, and null is too big to fit in one at all.
+   */
+  cageMoves: number | null;
 }
 
 export const MONSTERS: Record<MonsterKind, MonsterStats> = {
@@ -117,6 +122,7 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     screecher: false,
     boss: false,
     label: 'Imp',
+    cageMoves: Infinity,
   },
   brute: {
     kind: 'brute',
@@ -130,6 +136,7 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     screecher: false,
     boss: false,
     label: 'Brute',
+    cageMoves: 100,
   },
   wraith: {
     kind: 'wraith',
@@ -143,6 +150,7 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     screecher: true,
     boss: false,
     label: 'Wraith',
+    cageMoves: 0,
   },
   boss: {
     kind: 'boss',
@@ -157,6 +165,7 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     screecher: true,
     boss: true,
     label: BOSS.name,
+    cageMoves: null,
   },
   thanos: {
     kind: 'thanos',
@@ -172,6 +181,7 @@ export const MONSTERS: Record<MonsterKind, MonsterStats> = {
     screecher: true,
     boss: true,
     label: 'Thanos',
+    cageMoves: null,
   },
 };
 
@@ -259,4 +269,68 @@ export const FLOOR = {
   damageScalePerFloor: 0.12,
   /** Coin rewards scale more gently than threat. */
   coinScalePerFloor: 0.1,
+};
+
+/**
+ * Trap tiles. Step on one and you have been OUT WITTED: sent back up a floor, or your
+ * coins go down. Each one goes off once. Some have a tiny T on them if you look; some
+ * look exactly like floor.
+ */
+export const TRAPS = {
+  perFloor: 3,
+  /** How many of each floor's traps give themselves away with a tiny T. The rest don't. */
+  marked: 2,
+  /** Share of the party's coins a coin trap takes. Dying takes 0.2, so a trap stings less. */
+  coinLoss: 0.1,
+  /** What the screen says. His words. */
+  message: 'OUT WITTED!',
+};
+
+/**
+ * Giving tiles: the exact opposite of traps. Forward a level, or your coins go up.
+ * Some have a tiny G, the rest look exactly like floor.
+ */
+export const GIFTS = {
+  perFloor: 3,
+  /** How many of each floor's giving tiles have a tiny G. */
+  marked: 2,
+  /** Share of the party's coins a coin gift adds. The same 10% a trap takes. */
+  coinGain: 0.1,
+  /** What the screen says. He has not named it yet. */
+  message: 'LUCKY!',
+};
+
+/**
+ * The cage maker. Cage pieces lie about the floor; find enough and they make a cage,
+ * which you drop over the nearest demon. Imps never get out, brutes rattle their way
+ * out in 100 moves, and wraiths slip straight back out. A caged demon cannot move or
+ * hurt anybody, but you can still hit it through the bars.
+ */
+export const CAGES = {
+  piecesPerCage: 3,
+  /** Pieces lying on each floor: one cage's worth. */
+  piecesPerFloor: 3,
+  /** How close the nearest demon has to be for the cage to land on it. Three tiles. */
+  range: 3 * TILE,
+  /** How fast a brute rattles the bars. 100 moves at 4 a second is 25 seconds. */
+  movesPerSecond: 4,
+  /** Cold iron. Pieces, cages and the HUD all share it. */
+  tint: 0xc9d1de,
+};
+
+/**
+ * Wraiths come from graves. Every grave raises one when the floor starts, then another
+ * every few seconds while it stands. Smash every grave or they never stop coming, and
+ * the portal stays sealed while any grave is still standing.
+ */
+export const GRAVES = {
+  /** Graves start on floor 3, where wraiths always started. */
+  fromFloor: 3,
+  perFloor: 2,
+  /** Ten swings at your starting damage. */
+  maxHp: 200,
+  /** Seconds between wraiths. */
+  riseEvery: 10,
+  /** A grave stops raising while this many of its wraiths are still about. */
+  maxWraiths: 2,
 };

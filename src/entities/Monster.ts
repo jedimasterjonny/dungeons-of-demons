@@ -18,6 +18,9 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
   /** Counts down to the next scream. Staggered at spawn so a room never screams in unison. */
   private screechCooldown: number;
 
+  /** In a cage: it cannot move or hurt anybody, but it can still be hit through the bars. */
+  caged = false;
+
   declare body: Phaser.Physics.Arcade.Body;
 
   constructor(scene: Phaser.Scene, x: number, y: number, kind: MonsterKind, floor: number) {
@@ -75,8 +78,9 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
     this.stunTimer = 0.18;
     this.aggro = true;
 
-    // A boss barely rocks; a brute rocks a little; everything else flies.
-    const knock = this.stats.boss ? 55 : this.kind === 'brute' ? 150 : 280;
+    // A boss barely rocks; a brute rocks a little; everything else flies. Unless it is
+    // in a cage, where the bars stop it going anywhere.
+    const knock = this.caged ? 0 : this.stats.boss ? 55 : this.kind === 'brute' ? 150 : 280;
     this.body.setVelocity(Math.cos(fromAngle) * knock, Math.sin(fromAngle) * knock);
     return this.hp <= 0;
   }
@@ -94,6 +98,11 @@ export class Monster extends Phaser.Physics.Arcade.Sprite {
       this.setTintMode(Phaser.TintModes.MULTIPLY);
       if (this.stats.tint === 0xffffff) this.clearTint();
       else this.setTint(this.stats.tint);
+    }
+
+    if (this.caged) {
+      this.body.setVelocity(0, 0);
+      return;
     }
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, target.x, target.y);

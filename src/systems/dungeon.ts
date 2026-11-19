@@ -1,4 +1,4 @@
-import { BOSS, DARKNESS, FLOOR, KEYS, PLANET, TILE, WORLD, type MonsterKind } from './config';
+import { BOSS, CAGES, DARKNESS, FLOOR, GIFTS, GRAVES, KEYS, PLANET, TILE, TRAPS, WORLD, type MonsterKind } from './config';
 
 export const TileType = {
   Wall: 0,
@@ -26,6 +26,19 @@ export interface MonsterSpawn extends Spawn {
   kind: MonsterKind;
 }
 
+/**
+ * A tile that does something when you step on it. A trap and a giving tile are exact
+ * opposites, so they are the same thing with `good` flipped: a level up or down, or
+ * coins up or down.
+ */
+export interface SpecialTile extends Spawn {
+  /** A giving tile. Otherwise it is a trap. */
+  good: boolean;
+  effect: 'level' | 'coins';
+  /** Has a tiny letter on it if you are looking: T for a trap, G for a giving tile. */
+  marked: boolean;
+}
+
 export interface DungeonData {
   grid: TileType[][];
   rooms: Rect[];
@@ -38,6 +51,14 @@ export interface DungeonData {
   chests: Spawn[];
   /** The Star Sword, on the planet floor only. */
   sword?: Spawn;
+  /** Plain floor as far as the grid is concerned; only some show a tiny T. */
+  traps: SpecialTile[];
+  /** The same, the other way round; only some show a tiny G. */
+  gifts: SpecialTile[];
+  /** Where wraiths come from. Always in a main room, never a vault. */
+  graves: Spawn[];
+  /** Lying about the floor, waiting to be found. */
+  cagePieces: Spawn[];
 }
 
 /** Small deterministic RNG so a floor number always builds the same dungeon. */
@@ -128,11 +149,11 @@ export function monsterCountFor(floor: number): number {
   );
 }
 
+/** No wraiths: they come from graves (see GRAVES), never placed on a floor up front. */
 function kindsFor(floor: number): MonsterKind[] {
   const pool: MonsterKind[] = ['imp', 'imp', 'imp'];
   if (floor >= 2) pool.push('brute', 'brute');
-  if (floor >= 3) pool.push('wraith', 'wraith');
-  if (floor >= 5) pool.push('brute', 'wraith');
+  if (floor >= 5) pool.push('brute');
   return pool;
 }
 
@@ -319,5 +340,40 @@ export function generateDungeon(floor: number): DungeonData {
     chests.push(spotIn(r));
   }
 
-  return { grid, rooms, vaults, doors, playerStart, exit, shop, monsters, chests, sword };
+  // --- traps and giving tiles: plain floor anywhere but the room you land in, never
+  // under a chest, and never on each other. Placed last, so adding them did not move a
+  // single thing on any existing floor.
+  const inStartRoom = (x: number, y: number) =>
+    x >= startRoom.x && x < startRoom.x + startRoom.w && y >= startRoom.y && y < startRoom.y + startRoom.h;
+  const spots: Spawn[] = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (grid[y][x] === TileType.Floor && !inStartRoom(x, y) && !chests.some((c) => c.x === x && c.y === y)) {
+        spots.push({ x, y });
+      }
+    }
+  }
+  rng.shuffle(spots);
+  // Floor 1 has nowhere to be sent back to, so its traps only take coins. And a giving
+  // tile never skips a Demon Lord or Thanos, so on their floors it only gives coins.
+  const canMove = (good: boolean) => (good ? !isBossFloor(floor) && !isPlanetFloor(floor) : floor > 1);
+  const place = (spots: Spawn[], good: boolean, marked: number): SpecialTile[] =>
+    spots.map((s, i) => ({
+      ...s,
+      good,
+      effect: canMove(good) && rng.next() < 0.5 ? 'level' : 'coins',
+      marked: i < marked,
+    }));
+  const traps = place(spots.slice(0, TRAPS.perFloor), false, TRAPS.marked);
+  let left = spots.slice(TRAPS.perFloor);
+  const gifts = place(left.splice(0, GIFTS.perFloor), true, GIFTS.marked);
+
+  // --- graves, in the main rooms only: a grave behind a locked door would hold the
+  // portal shut until you found a key. Cage pieces can be anywhere, vaults included.
+  const inMainRoom = (s: Spawn) => rooms.slice(1).some((r) => s.x >= r.x && s.x < r.x + r.w && s.y >= r.y && s.y < r.y + r.h);
+  const graves = floor >= GRAVES.fromFloor ? left.filter(inMainRoom).slice(0, GRAVES.perFloor) : [];
+  left = left.filter((s) => !graves.includes(s));
+  const cagePieces = left.slice(0, CAGES.piecesPerFloor);
+
+  return { grid, rooms, vaults, doors, playerStart, exit, shop, monsters, chests, sword, traps, gifts, graves, cagePieces };
 }

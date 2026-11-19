@@ -1,5 +1,5 @@
 import { AVATARS, DEFAULT_AVATAR, avatarName, isAvatarId } from './avatars';
-import { CRATES, CURRENCY, KEYS, PLANET, PLAYER, SCREECH, SHARDS, type MonsterStats } from './config';
+import { CAGES, CRATES, CURRENCY, KEYS, PLANET, PLAYER, SCREECH, SHARDS, GIFTS, TRAPS, type MonsterStats } from './config';
 
 export type UpgradeId =
   | 'vitality'
@@ -306,11 +306,14 @@ export class GameState {
   fragments = 0;
   /** Whole keys in hand. Run-scoped: spent on locked doors, never saved. */
   keys = 0;
+  /** Cage pieces toward the next cage, and whole cages in hand. Run-scoped, like keys. */
+  cagePieces = 0;
+  cages = 0;
   /** Theme tune off. A setting rather than progress, so a save wipe leaves it alone. */
   musicOff = false;
   /**
-   * The last tenth floor whose ????? Shard was picked up. Floors only go up, so this
-   * one number answers "has this floor's shard been taken?" for every floor.
+   * The last tenth floor whose ????? Shard was picked up or left lying. One number
+   * answers "is this floor's shard gone?" for every floor below it too.
    */
   shardFloor = 0;
 
@@ -431,6 +434,38 @@ export class GameState {
     return true;
   }
 
+  /**
+   * Moves the party to floor n: through the portal, or a trap or a giving tile.
+   * A shard still lying on the floor you leave is gone for good, whichever way you go,
+   * so a trap that brings you back does not give that Demon Lord a second one to drop.
+   */
+  goToFloor(n: number, shardLeftLying: boolean): void {
+    if (shardLeftLying) this.shardFloor = Math.max(this.shardFloor, this.floor);
+    this.floor = Math.max(1, n);
+    this.deepestFloor = Math.max(this.deepestFloor, this.floor);
+    this.save();
+  }
+
+  /**
+   * A coin tile: a trap takes TRAPS.coinLoss of the party's coins, a giving tile adds
+   * GIFTS.coinGain. Returns how many coins moved.
+   */
+  tileCoins(good: boolean): number {
+    const n = Math.round(this.coins * (good ? GIFTS.coinGain : TRAPS.coinLoss));
+    this.coins += good ? n : -n;
+    this.save();
+    return n;
+  }
+
+  /** Picks up one cage piece. Returns true if that one finished a cage. */
+  addCagePiece(): boolean {
+    this.cagePieces += 1;
+    if (this.cagePieces < CAGES.piecesPerCage) return false;
+    this.cagePieces -= CAGES.piecesPerCage;
+    this.cages += 1;
+    return true;
+  }
+
   /** Adds fragments, rolling every full set over into a whole key. */
   addFragments(n: number): { keysGained: number } {
     this.fragments += n;
@@ -509,6 +544,8 @@ export class GameState {
     this.deepestFloor = fresh.deepestFloor;
     this.fragments = 0;
     this.keys = 0;
+    this.cagePieces = 0;
+    this.cages = 0;
     this.shardFloor = 0;
     // A wipe drops back to one player: co-op is chosen fresh from the title screen.
     this.players = [new PlayerState(0)];

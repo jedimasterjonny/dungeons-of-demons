@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BOSS, COOP, PLANET, SCREECH, SHARDS, WORLD } from '../systems/config';
+import { BOSS, CAGES, COOP, PLANET, SCREECH, SHARDS, WORLD } from '../systems/config';
 import { isDarkFloor } from '../systems/dungeon';
 import { gameState, type PlayerState } from '../systems/state';
 
@@ -34,6 +34,9 @@ export class HudScene extends Phaser.Scene {
   private keyIcon!: Phaser.GameObjects.Image;
   private fragPips!: Phaser.GameObjects.Graphics;
   private shardText!: Phaser.GameObjects.Text;
+  private cageIcon!: Phaser.GameObjects.Image;
+  private cageText!: Phaser.GameObjects.Text;
+  private cagePips!: Phaser.GameObjects.Graphics;
   private coinText!: Phaser.GameObjects.Text;
   private galaxyText!: Phaser.GameObjects.Text;
   private galaxyBar!: Phaser.GameObjects.Graphics;
@@ -67,6 +70,17 @@ export class HudScene extends Phaser.Scene {
       .text(keyX + 18, keyY, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#ffd15c' })
       .setOrigin(0, 0.5);
     this.fragPips = this.add.graphics();
+
+    // --- cages, shared like keys: whole ones, plus pips for pieces toward the next.
+    // Right of centre, where the top row is free: beside the keys they run into
+    // "FLOOR 100 · DARK", the widest thing the middle ever says.
+    const cageX = W / 2 + 160;
+    const cageY = 22;
+    this.cageIcon = this.add.image(cageX, cageY, 'cage').setScale(0.4).setTint(CAGES.tint);
+    this.cageText = this.add
+      .text(cageX + 16, cageY, '0', { fontFamily: FONT, fontSize: '17px', fontStyle: 'bold', color: '#d6dbe6' })
+      .setOrigin(0, 0.5);
+    this.cagePips = this.add.graphics();
 
     // --- ????? Shards, tucked under the keys: the top row has no room left.
     this.shardText = this.add
@@ -107,10 +121,10 @@ export class HudScene extends Phaser.Scene {
     // for both control sets runs straight into the demon counter in the middle.
     const hint = { fontFamily: FONT, fontSize: '10px', color: '#7d7a8c' };
     if (coop) {
-      this.add.text(W - 16, 44, 'P1  WASD · SPACE · Q', { ...hint, color: '#9a9080' }).setOrigin(1, 0.5);
-      this.add.text(W - 16, 58, 'P2  arrows · ENTER · SHIFT', { ...hint, color: '#6f9a88' }).setOrigin(1, 0.5);
+      this.add.text(W - 16, 44, 'P1  WASD · SPACE · Q · C', { ...hint, color: '#9a9080' }).setOrigin(1, 0.5);
+      this.add.text(W - 16, 58, 'P2  arrows · ENTER · SHIFT · /', { ...hint, color: '#6f9a88' }).setOrigin(1, 0.5);
     } else {
-      this.add.text(W - 16, 46, 'WASD move · SPACE attack · Q crate · E interact', hint).setOrigin(1, 0.5);
+      this.add.text(W - 16, 46, 'WASD move · SPACE attack · Q crate · C cage · E interact', hint).setOrigin(1, 0.5);
     }
   }
 
@@ -185,6 +199,7 @@ export class HudScene extends Phaser.Scene {
     const W = WORLD.viewWidth;
     const coop = gameState.isCoop;
     const monstersLeft = (this.registry.get('monstersLeft') as number) ?? 0;
+    const gravesLeft = (this.registry.get('gravesLeft') as number) ?? 0;
     const fragsPerKey = (this.registry.get('fragmentsPerKey') as number) ?? 3;
 
     gameState.players.forEach((who, i) => {
@@ -201,6 +216,16 @@ export class HudScene extends Phaser.Scene {
         .fillCircle(this.keyText.x + 22 + i * 13, this.keyIcon.y, 4.5);
     }
 
+    this.cageText.setText(`${gameState.cages}`).setAlpha(gameState.cages > 0 ? 1 : 0.4);
+    this.cageIcon.setAlpha(gameState.cages > 0 ? 1 : 0.4);
+    this.cagePips.clear();
+    for (let i = 0; i < CAGES.piecesPerCage; i++) {
+      const filled = i < gameState.cagePieces;
+      this.cagePips
+        .fillStyle(filled ? CAGES.tint : 0xffffff, filled ? 1 : 0.16)
+        .fillCircle(this.cageText.x + 22 + i * 13, this.cageIcon.y, 4.5);
+    }
+
     // Shared by the party in practice (everyone gets each boss's shard), so player
     // one's count speaks for both. Gold once the massive power is ready.
     const shards = gameState.me.shards;
@@ -215,13 +240,14 @@ export class HudScene extends Phaser.Scene {
     this.floorText
       .setText(dark ? `FLOOR ${gameState.floor}  ·  DARK` : `FLOOR ${gameState.floor}`)
       .setColor(dark ? '#a99cff' : '#ffffff');
+    const cleared = monstersLeft === 0 && gravesLeft === 0;
+    const left = [
+      monstersLeft > 0 && `${monstersLeft} demon${monstersLeft === 1 ? '' : 's'}`,
+      gravesLeft > 0 && `${gravesLeft} grave${gravesLeft === 1 ? '' : 's'}`,
+    ].filter(Boolean);
     this.monsterText
-      .setText(
-        monstersLeft === 0
-          ? 'Floor cleared — reach the portal'
-          : `${monstersLeft} demon${monstersLeft === 1 ? '' : 's'} remaining`
-      )
-      .setColor(monstersLeft === 0 ? '#4ade80' : '#ff8a8a');
+      .setText(cleared ? 'Floor cleared — reach the portal' : `${left.join(' · ')} remaining`)
+      .setColor(cleared ? '#4ade80' : '#ff8a8a');
 
     // --- boss health, whenever one is alive on this floor
     const bossHp = (this.registry.get('bossHp') as number) ?? 0;

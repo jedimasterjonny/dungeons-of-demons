@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { Monster } from '../entities/Monster';
 import { Player } from '../entities/Player';
 import { isInSwingArc } from '../systems/combat';
-import { BOSS, COOP, CRATES, DARKNESS, PLANET, KEYS, PLAYER, SCREECH, SHARDS, TILE, WORLD } from '../systems/config';
+import { BOSS, CAGES, COOP, CRATES, DARKNESS, PLANET, KEYS, PLAYER, SCREECH, SHARDS, TILE, GIFTS, GRAVES, MONSTERS, TRAPS, WORLD } from '../systems/config';
 import {
   TileType,
   generateDungeon,
@@ -12,6 +12,7 @@ import {
   tileToWorld,
   worldToTile,
   type DungeonData,
+  type SpecialTile,
 } from '../systems/dungeon';
 import { gameState, type PlayerState } from '../systems/state';
 import { hasStoryAfter } from '../systems/stories';
@@ -21,10 +22,22 @@ interface DoorSprite extends Phaser.Physics.Arcade.Sprite {
   tileY: number;
 }
 
+/** A grave: it raises wraiths until it is smashed. */
+interface GraveSprite extends Phaser.Physics.Arcade.Sprite {
+  hp: number;
+  /** Seconds to its next wraith. Only counts down while it is under its limit. */
+  timer: number;
+  /** The wraiths it raised, so it knows how many are still about. */
+  risen: Monster[];
+}
+
 /** A dropped crate. It wears down, so being walled in is always temporary. */
 interface CrateSprite extends Phaser.Physics.Arcade.Sprite {
   hp: number;
 }
+
+/** The tiny T and G: a shade lighter than the flagstone, so you only see them if you look. */
+const TILE_LETTER = 0xa89ccc;
 
 export class DungeonScene extends Phaser.Scene {
   private dungeon!: DungeonData;
@@ -36,6 +49,11 @@ export class DungeonScene extends Phaser.Scene {
   private pickups!: Phaser.Physics.Arcade.Group;
   private chests!: Phaser.Physics.Arcade.StaticGroup;
   private crates!: Phaser.Physics.Arcade.StaticGroup;
+  private graves!: Phaser.Physics.Arcade.StaticGroup;
+  private gravesLeft = 0;
+  private cagePieces!: Phaser.Physics.Arcade.Group;
+  /** Every caged demon: its bars, its countdown if it has one, and moves left to go. */
+  private cageBars = new Map<Monster, { bars: Phaser.GameObjects.Image; count?: Phaser.GameObjects.Text; movesLeft: number }>();
   /** Set on boss floors only, so the HUD can show its health bar. */
   private boss?: Monster;
   /** The Star Sword lying on the planet, until someone walks over it. */
@@ -88,6 +106,10 @@ export class DungeonScene extends Phaser.Scene {
   private rescueUi!: Phaser.GameObjects.Graphics;
   private monstersLeft = 0;
   private transitioning = false;
+  /** Traps and giving tiles that have not gone off yet, by "x,y" tile. */
+  private specialTiles = new Map<string, SpecialTile>();
+  /** The tiny T or G on the ones that have one, by the same key. */
+  private tileMarks = new Map<string, Phaser.GameObjects.Image>();
   /** Recomputed each frame; the E handler acts on whatever is currently in reach. */
   private nearShop = false;
   private nearExit = false;
@@ -106,10 +128,21 @@ export class DungeonScene extends Phaser.Scene {
     for (const p of gameState.players) p.refreshForFloor();
     this.playerMuffs.clear();
     this.footRings.clear();
+    this.cageBars.clear();
     // The scene object is reused floor to floor, so last floor's darkness would
     // otherwise linger as a handle to render textures this floor has already destroyed.
     this.dark = undefined;
     this.dungeon = generateDungeon(gameState.floor);
+    const special = [...this.dungeon.traps, ...this.dungeon.gifts];
+    this.specialTiles = new Map(special.map((t) => [`${t.x},${t.y}`, t]));
+    this.tileMarks = new Map(
+      special
+        .filter((t) => t.marked)
+        .map((t) => [
+          `${t.x},${t.y}`,
+          this.add.image(tileToWorld(t.x), tileToWorld(t.y), t.good ? 'giftG' : 'trapT').setTint(TILE_LETTER).setDepth(1),
+        ])
+    );
 
     const worldW = WORLD.cols * TILE;
     const worldH = WORLD.rows * TILE;
@@ -173,6 +206,8 @@ export class DungeonScene extends Phaser.Scene {
       this.input.keyboard?.off('keydown-E', this.onInteract, this);
       this.input.keyboard?.off('keydown-Q', this.onDropCrateOne, this);
       this.input.keyboard?.off('keydown-SHIFT', this.onDropCrateTwo, this);
+      this.input.keyboard?.off('keydown-C', this.onCageOne, this);
+      this.input.keyboard?.off('keydown-FORWARD_SLASH', this.onCageTwo, this);
     });
   }
 
@@ -401,6 +436,18 @@ export class DungeonScene extends Phaser.Scene {
     for (const m of this.dungeon.monsters) {
       this.monsters.add(new Monster(this, tileToWorld(m.x), tileToWorld(m.y), m.kind, gameState.floor));
     }
+
+    // Wraiths come from graves: each one raises its first as the floor begins.
+    this.graves = this.physics.add.staticGroup();
+    for (const g of this.dungeon.graves) {
+      const grave = this.graves.create(tileToWorld(g.x), tileToWorld(g.y), 'grave').setDepth(12) as GraveSprite;
+      grave.hp = GRAVES.maxHp;
+      grave.timer = GRAVES.riseEvery;
+      grave.risen = [];
+      grave.refreshBody();
+      this.raiseWraith(grave);
+    }
+    this.gravesLeft = this.graves.getLength();
     this.monstersLeft = this.monsters.getLength();
     this.boss = (this.monsters.getChildren() as Monster[]).find((m) => m.stats.boss);
     this.publishBoss();
@@ -414,13 +461,23 @@ export class DungeonScene extends Phaser.Scene {
       this.chests.create(tileToWorld(c.x), tileToWorld(c.y), 'chest').setDepth(5).refreshBody();
     }
 
+    this.cagePieces = this.physics.add.group();
+    for (const c of this.dungeon.cagePieces) {
+      const piece = this.cagePieces.create(tileToWorld(c.x), tileToWorld(c.y), 'cagepiece') as Phaser.Physics.Arcade.Sprite;
+      piece.setTint(CAGES.tint).setDepth(5);
+      this.tweens.add({ targets: piece, y: piece.y - 4, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+
     this.physics.add.collider(this.monsters, this.walls);
     this.physics.add.collider(this.monsters, this.monsters);
     this.physics.add.collider(this.monsters, this.doors);
+    // Wraiths are ghosts: they float straight through headstones. Nothing else does.
+    this.physics.add.collider(this.monsters, this.graves, undefined, (m) => (m as Monster).kind !== 'wraith');
 
     for (const player of this.players) {
       this.physics.add.collider(player, this.walls);
       this.physics.add.collider(player, this.crates);
+      this.physics.add.collider(player, this.graves);
       this.physics.add.collider(player, this.doors, undefined, () => {
         this.tryUnlockNearestDoor(player);
         return true;
@@ -429,6 +486,7 @@ export class DungeonScene extends Phaser.Scene {
     // Demons chew through what blocks them. The callback runs every frame of
     // contact, so the damage is dealt per second rather than per touch.
     this.physics.add.collider(this.monsters, this.crates, (m, c) => {
+      if ((m as Monster).caged) return;
       const dt = this.game.loop.delta / 1000;
       this.damageCrate(c as CrateSprite, (m as Monster).damage * CRATES.chewRate * dt);
     });
@@ -436,6 +494,8 @@ export class DungeonScene extends Phaser.Scene {
     for (const player of this.players) {
       this.physics.add.overlap(player, this.monsters, (_p, m) => {
         const monster = m as Monster;
+        // Through the bars it can neither bite you nor be reached by anything but a sword.
+        if (monster.caged) return;
         // You can only be downed while somebody else is still up to come for you.
         // Alone, running out of health is simply death.
         const rescuerLeft = this.players.some((o) => o !== player && o.sheet.isPlaying);
@@ -452,6 +512,10 @@ export class DungeonScene extends Phaser.Scene {
 
       this.physics.add.overlap(player, this.chests, (_p, c) => {
         this.openChest(c as Phaser.Physics.Arcade.Sprite, player);
+      });
+
+      this.physics.add.overlap(player, this.cagePieces, (_p, piece) => {
+        this.takeCagePiece(piece as Phaser.Physics.Arcade.Sprite, player);
       });
     }
 
@@ -500,6 +564,19 @@ export class DungeonScene extends Phaser.Scene {
     kb.on('keydown-E', this.onInteract, this);
     kb.on('keydown-Q', this.onDropCrateOne, this);
     kb.on('keydown-SHIFT', this.onDropCrateTwo, this);
+    kb.on('keydown-C', this.onCageOne, this);
+    // Captured, or Firefox takes "/" as quick-find and steals the keyboard.
+    kb.addCapture(Phaser.Input.Keyboard.KeyCodes.FORWARD_SLASH);
+    kb.on('keydown-FORWARD_SLASH', this.onCageTwo, this);
+  }
+
+  private onCageOne(): void {
+    this.onCage(this.players[0]);
+  }
+
+  /** Only ever does anything in co-op, where there is a player two to throw it. */
+  private onCageTwo(): void {
+    if (this.players[1]) this.onCage(this.players[1]);
   }
 
   private onDropCrateOne(): void {
@@ -514,7 +591,7 @@ export class DungeonScene extends Phaser.Scene {
   private onInteract(): void {
     if (this.transitioning) return;
     if (this.nearShop) this.openShop();
-    else if (this.nearExit && this.monstersLeft === 0) this.escape();
+    else if (this.nearExit && this.wayOut) this.escape();
   }
 
   /** Which player E is acting for — whoever is standing on the pad or the portal. */
@@ -599,6 +676,8 @@ export class DungeonScene extends Phaser.Scene {
 
       // Just behind the feet, so it reads as standing on the ring rather than in it.
       this.footRings.get(player)?.setPosition(player.x, player.y + 11);
+
+      if (player.sheet.isPlaying) this.checkSpecialTile(player);
     });
 
     for (const m of this.monsters.getChildren() as Monster[]) {
@@ -611,6 +690,8 @@ export class DungeonScene extends Phaser.Scene {
     this.publishBoss();
     this.updatePrompts();
     this.homePickups(dt);
+    this.tickGraves(dt);
+    this.tickCages(dt);
   }
 
   /**
@@ -761,6 +842,14 @@ export class DungeonScene extends Phaser.Scene {
       if (killed) this.killMonster(m, player);
     }
 
+    for (const g of [...(this.graves.getChildren() as GraveSprite[])]) {
+      if (!g.active) continue;
+      if (!isInSwingArc(player, angle, g, TILE / 2, PLAYER.attackRange, maxArc)) continue;
+      hitAny = true;
+      this.spark(g.x, g.y, 0x8a8496, 5);
+      this.damageGrave(g, player.sheet.damage);
+    }
+
     // Your own crates are in the way of your own sword — that is the way out of a
     // box you have walled yourself into.
     for (const c of [...(this.crates.getChildren() as CrateSprite[])]) {
@@ -774,7 +863,223 @@ export class DungeonScene extends Phaser.Scene {
     if (hitAny) this.cameras.main.shake(80, 0.003);
   }
 
+  /**
+   * Your middle on a trap or a giving tile sets it off. Each one goes off once and
+   * leaves its mark: a red crack for a trap, a green sparkle for a gift.
+   */
+  private checkSpecialTile(player: Player): void {
+    if (this.transitioning) return;
+    const key = `${worldToTile(player.x)},${worldToTile(player.y)}`;
+    const tile = this.specialTiles.get(key);
+    if (!tile) return;
+    this.specialTiles.delete(key);
+    this.tileMarks.get(key)?.destroy();
+
+    const x = tileToWorld(tile.x);
+    const y = tileToWorld(tile.y);
+    this.add.image(x, y, tile.good ? 'gift' : 'trap').setTint(tile.good ? 0x4ade80 : 0xff3b5c).setDepth(1);
+    if (tile.good) this.spark(x, y, 0x4ade80, 18);
+    else this.cameras.main.shake(260, 0.012);
+
+    const say = (detail: string) =>
+      this.banner(tile.good ? GIFTS.message : TRAPS.message, tile.good ? '#4ade80' : '#ff3b5c', detail);
+
+    if (tile.effect === 'coins') {
+      say(`${tile.good ? '+' : '-'}${gameState.tileCoins(tile.good).toLocaleString()} COINS`);
+      return;
+    }
+
+    // A level up or down. Everything freezes so you can read what happened, then you go.
+    const to = gameState.floor + (tile.good ? 1 : -1);
+    this.transitioning = true;
+    this.physics.pause();
+    say(`${tile.good ? 'FORWARD' : 'BACK'} TO FLOOR ${to}`);
+    for (const p of gameState.players) {
+      p.downed = false;
+      p.rescueProgress = 0;
+      p.hp = Math.max(p.hp, 1);
+    }
+    this.time.delayedCall(1500, () => {
+      if (tile.good) this.cameras.main.fadeOut(400, 0, 30, 10);
+      else this.cameras.main.fadeOut(400, 40, 0, 0);
+      this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+        gameState.goToFloor(to, this.shardPickup?.active === true);
+        this.scene.restart();
+      });
+    });
+  }
+
+  /** Big words in the middle of the screen, with what just happened under them. */
+  private banner(message: string, color: string, detail: string): void {
+    const style = { fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', stroke: '#000000' };
+    const words = [
+      this.add.text(WORLD.viewWidth / 2, WORLD.viewHeight / 2 - 28, message, {
+        ...style,
+        fontSize: '60px',
+        color,
+        strokeThickness: 8,
+      }),
+      this.add.text(WORLD.viewWidth / 2, WORLD.viewHeight / 2 + 26, detail, {
+        ...style,
+        fontSize: '22px',
+        color: '#ffd15c',
+        strokeThickness: 5,
+      }),
+    ];
+    for (const w of words) w.setOrigin(0.5).setScrollFactor(0).setDepth(300);
+    this.tweens.add({ targets: words, scale: { from: 0.3, to: 1 }, duration: 280, ease: 'Back.easeOut' });
+    this.tweens.add({
+      targets: words,
+      alpha: 0,
+      delay: 1800,
+      duration: 400,
+      onComplete: () => words.forEach((w) => w.destroy()),
+    });
+  }
+
+  // --- graves and cages -------------------------------------------------
+
+  /** A wraith comes up out of the grave, fading in where it stands. */
+  private raiseWraith(grave: GraveSprite): void {
+    const wraith = new Monster(this, grave.x, grave.y - 6, 'wraith', gameState.floor);
+    this.monsters.add(wraith);
+    grave.risen.push(wraith);
+    wraith.setAlpha(0);
+    this.tweens.add({ targets: wraith, alpha: 1, duration: 500 });
+    this.spark(grave.x, grave.y - 10, MONSTERS.wraith.tint, 10);
+    this.monstersLeft = this.monsters.getLength();
+  }
+
+  private tickGraves(dt: number): void {
+    for (const grave of this.graves.getChildren() as GraveSprite[]) {
+      grave.risen = grave.risen.filter((w) => w.active);
+      if (grave.risen.length >= GRAVES.maxWraiths) continue;
+      grave.timer -= dt;
+      if (grave.timer > 0) continue;
+      grave.timer = GRAVES.riseEvery;
+      this.raiseWraith(grave);
+      this.emitStats();
+    }
+  }
+
+  /** Wears a grave down like a crate, and smashes it at zero. */
+  private damageGrave(grave: GraveSprite, amount: number): void {
+    grave.hp -= amount;
+    if (grave.hp > 0) {
+      grave.setAlpha(0.45 + 0.55 * (grave.hp / GRAVES.maxHp));
+      return;
+    }
+    this.spark(grave.x, grave.y, 0x8a8496, 18);
+    this.floatText(grave.x, grave.y - 24, 'GRAVE SMASHED', '#d6d1e0');
+    grave.destroy();
+    this.gravesLeft = this.graves.getLength();
+    this.checkWayOut();
+    this.emitStats();
+  }
+
+  private takeCagePiece(piece: Phaser.Physics.Arcade.Sprite, by: Player): void {
+    if (!piece.active || by.isDowned) return;
+    const { x, y } = piece;
+    piece.destroy();
+    if (gameState.addCagePiece()) {
+      // Flash first, words after: words drawn under a flash are washed out unreadable.
+      this.cameras.main.flash(180, 200, 210, 230);
+      this.time.delayedCall(180, () => this.floatText(by.x, by.y - 34, 'CAGE MADE!  PRESS C', '#ffffff', 1800));
+    } else {
+      this.floatText(x, y - 16, `CAGE PIECE ${gameState.cagePieces}/${CAGES.piecesPerCage}`, '#d6dbe6');
+    }
+  }
+
+  /** Drops a cage over the nearest demon that will fit in one. */
+  private onCage(player: Player): void {
+    if (this.transitioning || player.isDowned) return;
+    if (gameState.cages <= 0) {
+      this.floatText(player.x, player.y - 30, `NO CAGES — FIND ${CAGES.piecesPerCage} PIECES`, '#ff8a8a');
+      return;
+    }
+    const away = (m: Monster) => Phaser.Math.Distance.Between(m.x, m.y, player.x, player.y);
+    const near = (this.monsters.getChildren() as Monster[])
+      .filter((m) => m.active && !m.caged && away(m) < CAGES.range)
+      .sort((a, b) => away(a) - away(b));
+    const target = near.find((m) => m.stats.cageMoves !== null);
+    if (!target) {
+      this.floatText(player.x, player.y - 30, near.length ? 'TOO BIG FOR A CAGE' : 'NO DEMON CLOSE ENOUGH', '#ff8a8a');
+      return;
+    }
+
+    gameState.cages -= 1;
+    const bars = this.add.image(target.x, target.y, 'cage').setTint(CAGES.tint).setDepth(25).setScale(1.4);
+    this.tweens.add({ targets: bars, scale: 1, duration: 160, ease: 'Back.easeOut' });
+    this.spark(target.x, target.y, CAGES.tint, 10);
+
+    const moves = target.stats.cageMoves!;
+    if (moves === 0) {
+      // Wraiths slip straight back out, and the cage is spent.
+      this.floatText(target.x, target.y - 30, 'SLIPPED OUT!', '#4ad9ff');
+      this.tweens.add({ targets: bars, alpha: 0, delay: 250, duration: 300, onComplete: () => bars.destroy() });
+      return;
+    }
+
+    target.caged = true;
+    target.body.setVelocity(0, 0);
+    target.body.setImmovable(true);
+    // Brutes count down out loud. Imps are in there for good, so they get no number.
+    const count = Number.isFinite(moves)
+      ? this.add
+          .text(target.x, target.y - 30, `${moves}`, {
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: '13px',
+            fontStyle: 'bold',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3,
+          })
+          .setOrigin(0.5)
+          .setDepth(26)
+      : undefined;
+    this.cageBars.set(target, { bars, count, movesLeft: moves });
+    this.floatText(target.x, target.y - 44, 'CAGED!', '#ffffff');
+  }
+
+  /** Brutes rattle the bars, one move at a time, until they are out. */
+  private tickCages(dt: number): void {
+    for (const [m, cage] of this.cageBars) {
+      if (!Number.isFinite(cage.movesLeft)) continue;
+      cage.movesLeft -= CAGES.movesPerSecond * dt;
+      cage.bars.x = m.x + Math.sin(this.time.now / 35) * 1.5;
+      cage.count?.setText(`${Math.max(0, Math.ceil(cage.movesLeft))}`);
+      if (cage.movesLeft > 0) continue;
+      this.uncage(m);
+      this.spark(m.x, m.y, CAGES.tint, 14);
+      this.floatText(m.x, m.y - 30, 'BROKE OUT!', '#ff8a8a');
+    }
+  }
+
+  /** Takes the bars away: it broke out, or it died in there. */
+  private uncage(m: Monster): void {
+    const cage = this.cageBars.get(m);
+    if (!cage) return;
+    this.cageBars.delete(m);
+    cage.bars.destroy();
+    cage.count?.destroy();
+    m.caged = false;
+    m.body?.setImmovable(false);
+  }
+
+  /** The portal opens once every demon is dead and every grave is smashed. */
+  private get wayOut(): boolean {
+    return this.monstersLeft === 0 && this.gravesLeft === 0;
+  }
+
+  private checkWayOut(): void {
+    if (!this.wayOut) return;
+    this.exitPortal.setTint(0x4ade80);
+    this.floatText(this.exitPortal.x, this.exitPortal.y - 24, 'THE WAY OUT IS OPEN', '#4ade80');
+    this.cameras.main.flash(300, 60, 200, 120);
+  }
+
   private killMonster(m: Monster, by: Player): void {
+    this.uncage(m);
     const { x, y } = m;
     const coins = m.coinValue;
     const wasBoss = m.stats.boss;
@@ -798,11 +1103,7 @@ export class DungeonScene extends Phaser.Scene {
       this.dropPickup(x, y, 'fragment', { fragment: true });
     }
 
-    if (this.monstersLeft === 0) {
-      this.exitPortal.setTint(0x4ade80);
-      this.floatText(this.exitPortal.x, this.exitPortal.y - 24, 'THE WAY OUT IS OPEN', '#4ade80');
-      this.cameras.main.flash(300, 60, 200, 120);
-    }
+    this.checkWayOut();
     this.emitStats();
   }
 
@@ -1071,12 +1372,13 @@ export class DungeonScene extends Phaser.Scene {
     let anchor = atShop ?? atExit;
 
     if (atShop) text = 'E — Shop';
-    else if (atExit)
-      text =
-        this.monstersLeft === 0
-          ? 'E — Escape to the next floor'
-          : `Sealed — ${this.monstersLeft} demon${this.monstersLeft === 1 ? '' : 's'} still breathing`;
-    else {
+    else if (atExit) {
+      const left = [
+        this.monstersLeft > 0 && `${this.monstersLeft} demon${this.monstersLeft === 1 ? '' : 's'} still breathing`,
+        this.gravesLeft > 0 && `${this.gravesLeft} grave${this.gravesLeft === 1 ? '' : 's'} still standing`,
+      ].filter(Boolean);
+      text = left.length ? `Sealed — ${left.join(', ')}` : 'E — Escape to the next floor';
+    } else {
       const atDoor = this.nearestDoorTo();
       if (atDoor) {
         anchor = atDoor;
@@ -1114,8 +1416,9 @@ export class DungeonScene extends Phaser.Scene {
     this.transitioning = true;
 
     const cleared = gameState.floor;
-    gameState.floor += 1;
-    gameState.deepestFloor = Math.max(gameState.deepestFloor, gameState.floor);
+    // A chapter plays the first time you clear its floor, not again after a trap sent
+    // you back up to it.
+    const firstTime = cleared >= gameState.deepestFloor;
     // Escaping patches you up a little — enough to keep going, not enough to coast.
     // A player who was down when the floor ended is picked back up by leaving it.
     for (const p of gameState.players) {
@@ -1123,12 +1426,12 @@ export class DungeonScene extends Phaser.Scene {
       p.rescueProgress = 0;
       p.hp = Math.min(p.maxHp, Math.max(p.hp, 1) + Math.round(p.maxHp * 0.35));
     }
-    gameState.save();
+    gameState.goToFloor(cleared + 1, this.shardPickup?.active === true);
 
     this.cameras.main.fadeOut(400, 0, 0, 0);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       // Every tenth floor has a chapter waiting; it starts the next floor itself.
-      if (hasStoryAfter(cleared)) this.scene.start('Story', { afterFloor: cleared, next: 'Dungeon' });
+      if (firstTime && hasStoryAfter(cleared)) this.scene.start('Story', { afterFloor: cleared, next: 'Dungeon' });
       else this.scene.restart();
     });
   }
@@ -1201,6 +1504,7 @@ export class DungeonScene extends Phaser.Scene {
    */
   private emitStats(): void {
     this.registry.set('monstersLeft', this.monstersLeft);
+    this.registry.set('gravesLeft', this.gravesLeft);
     this.registry.set('monstersTotal', this.dungeon.monsters.length);
     this.registry.set('fragmentsPerKey', KEYS.fragmentsPerKey);
   }
